@@ -25,9 +25,6 @@ def _browser_session_secret() -> str:
     approval = os.getenv("AGENT_APPROVAL_SECRET", "").strip()
     if approval not in _INSECURE_SECRET_PLACEHOLDERS:
         return approval
-    # Browser sessions are process-local today, so a per-process secret is safer
-    # than silently accepting a public placeholder. Configure the env var when
-    # multi-instance/shared-token continuity is required.
     return secrets.token_urlsafe(48)
 
 
@@ -36,6 +33,8 @@ class Settings(BaseModel):
     model: str = os.getenv("AGENT_MODEL", "")
     api_base: str = os.getenv("AGENT_API_BASE", "https://api.openai.com/v1")
     api_key: str = os.getenv("AGENT_API_KEY", "")
+    provider_max_retries: int = int(os.getenv("AGENT_PROVIDER_MAX_RETRIES", "2"))
+    provider_retry_base_seconds: float = float(os.getenv("AGENT_PROVIDER_RETRY_BASE_SECONDS", "0.8"))
     workspace: Path = Path(os.getenv("AGENT_WORKSPACE", "./workspace")).resolve()
     memory_db: Path = Path(os.getenv("AGENT_MEMORY_DB", "./data/agent_memory.sqlite3")).resolve()
     approval_db: Path = Path(os.getenv("AGENT_APPROVAL_DB", "./data/approvals.sqlite3")).resolve()
@@ -54,7 +53,7 @@ class Settings(BaseModel):
     database_url: str = os.getenv("AGENT_DATABASE_URL", "")
     github_token: str = os.getenv("AGENT_GITHUB_TOKEN", "")
     github_api_base: str = os.getenv("AGENT_GITHUB_API_BASE", "https://api.github.com")
-    web_user_agent: str = os.getenv("AGENT_WEB_USER_AGENT", "Nisr/0.4")
+    web_user_agent: str = os.getenv("AGENT_WEB_USER_AGENT", "Nisr/0.4.1")
     max_steps: int = int(os.getenv("AGENT_MAX_STEPS", "30"))
     context_budget_chars: int = int(os.getenv("AGENT_CONTEXT_BUDGET_CHARS", "50000"))
     auto_approve_low_risk: bool = os.getenv("AGENT_AUTO_APPROVE_LOW_RISK", "true").lower() == "true"
