@@ -13,6 +13,7 @@ COPY ports ./ports
 COPY adapters ./adapters
 COPY infrastructure ./infrastructure
 COPY api ./api
+COPY ui ./ui
 COPY config ./config
 COPY docs ./docs
 
