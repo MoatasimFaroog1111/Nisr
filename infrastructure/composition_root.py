@@ -17,6 +17,7 @@ from adapters.storage.artifact_filesystem import FileSystemArtifactAdapter
 from adapters.storage.audit_jsonl import JsonlAuditAdapter
 from adapters.storage.memory_sqlite import SqliteMemoryAdapter
 from adapters.storage.session_sqlite import SqliteSessionStore
+from adapters.telemetry.provider_audit import AuditProviderTelemetry
 from adapters.tools.approval_status import ApprovalStatusTool
 from adapters.tools.artifact import ArtifactTool
 from adapters.tools.browser import browser_tools
@@ -30,11 +31,14 @@ from application.browser_streaming import BrowserFrameStreamer
 from application.execution import ActionExecutor, ContextBuilder, ContextCompressor, ExecutionEngine, SubagentCoordinator
 from application.orchestrator import Orchestrator
 from application.planning import PlanningService
+from application.token_budget import RunTokenBudgetManager
 from application.verification import VerificationService
 from domain.contracts import RiskPolicy
 from infrastructure.settings import Settings, settings as default_settings
 from ports.database import DatabasePort
 from ports.model_provider import ModelProviderPort
+from ports.provider_telemetry import ProviderTelemetryPort
+from ports.token_budget import TokenBudgetPort
 
 
 @dataclass(slots=True)
@@ -66,9 +70,14 @@ class RuntimeContainer(ManagementContainer):
     sessions: SqliteSessionStore
     tools: ToolRegistry
     browser_runtime: BrowserRuntimeContainer
+    token_budget: RunTokenBudgetManager
 
 
-def _build_provider(settings: Settings) -> ModelProviderPort:
+def _build_provider(
+    settings: Settings,
+    telemetry: ProviderTelemetryPort,
+    token_budget: TokenBudgetPort,
+) -> ModelProviderPort:
     if settings.provider == "openai_compatible":
         return OpenAICompatibleAdapter(
             settings.api_base,
@@ -76,6 +85,8 @@ def _build_provider(settings: Settings) -> ModelProviderPort:
             settings.model,
             max_retries=settings.provider_max_retries,
             retry_base_seconds=settings.provider_retry_base_seconds,
+            telemetry=telemetry,
+            token_budget=token_budget,
         )
     raise ValueError(f"Unsupported provider: {settings.provider}")
 
@@ -152,13 +163,23 @@ def build_runtime(
 ) -> RuntimeContainer:
     """Composition root: the only place that chooses concrete adapters."""
     settings.prepare_directories()
-    provider = provider or _build_provider(settings)
     legacy_approvals = approvals or []
     risk = RiskPolicy()
     management = build_management(settings, presented_approvals=legacy_approvals)
     audit = management.audit
     artifact_store = management.artifacts
     approval_service = management.approvals
+
+    token_budget = RunTokenBudgetManager(
+        run_token_budget=settings.run_token_budget,
+        provider_token_reserve=settings.provider_token_reserve,
+        chars_per_token=settings.token_chars_per_token,
+        min_context_chars=settings.min_context_budget_chars,
+        context_safety_ratio=settings.context_budget_safety_ratio,
+    )
+    telemetry = AuditProviderTelemetry(audit)
+    provider = provider or _build_provider(settings, telemetry, token_budget)
+
     memory = SqliteMemoryAdapter(settings.memory_db)
     sessions = SqliteSessionStore(settings.session_db)
     browser_runtime = browser_runtime or build_browser_runtime(settings)
@@ -182,10 +203,11 @@ def build_runtime(
     database = _build_database(settings.database_url)
     if database is not None:
         tools.register(DatabaseTool(database, risk, approval_service))
+
     planner = PlanningService(provider)
     verifier = VerificationService(tools)
     subagents = SubagentCoordinator(provider)
-    context = ContextBuilder(ContextCompressor(settings.context_budget_chars))
+    context = ContextBuilder(ContextCompressor(settings.context_budget_chars), token_budget)
     action_executor = ActionExecutor(tools, memory, subagents, audit)
     execution = ExecutionEngine(provider, tools, memory, action_executor, context)
     orchestrator = Orchestrator(
@@ -205,4 +227,5 @@ def build_runtime(
         sessions=sessions,
         tools=tools,
         browser_runtime=browser_runtime,
+        token_budget=token_budget,
     )
