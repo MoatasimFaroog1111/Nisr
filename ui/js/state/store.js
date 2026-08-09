@@ -13,6 +13,18 @@ const initialState = {
   approvals: [],
   artifacts: [],
   audit: [],
+  browser: {
+    sessionId: null,
+    token: null,
+    realtimeStatus: "disconnected",
+    owner: "agent",
+    controlState: "AGENT_CONTROL",
+    state: null,
+    frame: null,
+    activity: [],
+    takeoverRequested: false,
+    takeoverReason: null,
+  },
 };
 
 class Store {
