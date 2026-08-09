@@ -9,6 +9,7 @@ from domain.models import ToolResult
 class BaseTool(ABC):
     name: str
     description: str
+    sensitive_fields: frozenset[str] = frozenset()
 
     @abstractmethod
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
