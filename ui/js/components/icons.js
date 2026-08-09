@@ -9,6 +9,11 @@ const paths = {
   send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
   refresh: '<path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M5.6 9a7 7 0 0 1 11.7-2.6L20 11M4 13l2.7 4.6A7 7 0 0 0 18.4 15"/>',
   external: '<path d="M14 3h7v7M10 14 21 3"/><path d="M21 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h6"/>',
+  computer: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
+  back: '<path d="m15 18-6-6 6-6"/>',
+  forward: '<path d="m9 18 6-6-6-6"/>',
+  cursor: '<path d="m4 3 7 17 2.2-6.8L20 11z"/>',
+  handoff: '<path d="M7 7h10l-3-3M17 17H7l3 3"/><path d="M17 4v6M7 20v-6"/>',
 };
 
 export function icon(name, className = "icon") {

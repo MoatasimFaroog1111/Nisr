@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from adapters.browser.playwright import BrowserSession
+from adapters.browser.playwright_provider import PlaywrightBrowserProvider
 from infrastructure.settings import Settings, settings as default_settings
 
 
-async def readiness_snapshot(settings: Settings = default_settings) -> dict[str, Any]:
+async def readiness_snapshot(
+    settings: Settings = default_settings,
+    browser_provider: PlaywrightBrowserProvider | None = None,
+) -> dict[str, Any]:
     checks: dict[str, Any] = {}
 
     provider_ok = bool(settings.provider and settings.model and settings.api_key and settings.api_base)
@@ -16,10 +19,10 @@ async def readiness_snapshot(settings: Settings = default_settings) -> dict[str,
         "model": settings.model or None,
     }
 
-    session = BrowserSession(settings.artifacts_dir)
+    owned_provider = browser_provider is None
+    provider = browser_provider or PlaywrightBrowserProvider()
     try:
-        browser = await session.probe()
-        checks["browser"] = browser
+        checks["browser"] = await provider.probe()
     except Exception as exc:
         checks["browser"] = {
             "ok": False,
@@ -27,12 +30,13 @@ async def readiness_snapshot(settings: Settings = default_settings) -> dict[str,
             "error_type": type(exc).__name__,
         }
     finally:
-        await session.close()
+        if owned_provider:
+            await provider.close_all()
 
     ok = all(bool(check.get("ok")) for check in checks.values())
     return {
         "ok": ok,
         "service": "nisr",
-        "version": "0.3.1",
+        "version": "0.4.0",
         "checks": checks,
     }

@@ -13,10 +13,20 @@ class AgentMode(str, Enum):
     PLANNING = "PLANNING"
     EXECUTION = "EXECUTION"
     WAITING_APPROVAL = "WAITING_APPROVAL"
+    WAITING_USER = "WAITING_USER"
     VERIFICATION = "VERIFICATION"
     DEBUGGING = "DEBUGGING"
     RECOVERY = "RECOVERY"
     DELIVERY = "DELIVERY"
+
+
+class AgentRunStatus(str, Enum):
+    RUNNING = "RUNNING"
+    WAITING_TOOL = "WAITING_TOOL"
+    WAITING_USER = "WAITING_USER"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class RiskLevel(str, Enum):
@@ -30,6 +40,7 @@ class TaskStatus(str, Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     WAITING_APPROVAL = "waiting_approval"
+    WAITING_USER = "waiting_user"
     COMPLETED = "completed"
     BLOCKED = "blocked"
 
@@ -72,9 +83,13 @@ class SubagentRequest(BaseModel):
 
 class AgentState(BaseModel):
     session_id: str = Field(default_factory=lambda: uuid4().hex)
+    user_id: str = "api"
+    browser_session_id: str | None = None
     objective: str
     constraints: list[str] = Field(default_factory=list)
     mode: AgentMode = AgentMode.UNDERSTAND
+    run_status: AgentRunStatus = AgentRunStatus.RUNNING
+    waiting_reason: str | None = None
     plan: Plan = Field(default_factory=Plan)
     current_task: str | None = None
     completed_tasks: list[str] = Field(default_factory=list)

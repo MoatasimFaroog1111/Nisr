@@ -3,13 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from adapters.browser.playwright import BrowserSession, PlaywrightBrowserTool
+from adapters.browser.playwright_provider import PlaywrightBrowserProvider
 from adapters.database.postgres import PostgresDatabaseAdapter
 from adapters.database.sqlite import SqliteDatabaseAdapter
 from adapters.database.tool import DatabaseTool
 from adapters.deployment.docker import DockerDeploymentTool
 from adapters.github.rest import GitHubRestTool
 from adapters.llm.openai_compatible import OpenAICompatibleAdapter
+from adapters.realtime.browser_events import InMemoryBrowserEventHub
+from adapters.security.browser_tokens import BrowserSessionTokenService
 from adapters.storage.approval_sqlite import ApprovalService, HmacApprovalTokenService, SqliteApprovalRepository
 from adapters.storage.artifact_filesystem import FileSystemArtifactAdapter
 from adapters.storage.audit_jsonl import JsonlAuditAdapter
@@ -17,11 +19,14 @@ from adapters.storage.memory_sqlite import SqliteMemoryAdapter
 from adapters.storage.session_sqlite import SqliteSessionStore
 from adapters.tools.approval_status import ApprovalStatusTool
 from adapters.tools.artifact import ArtifactTool
+from adapters.tools.browser import browser_tools
 from adapters.tools.files import FileListTool, FileReadTool, FileSearchTool, FileWriteTool
 from adapters.tools.git import GitTool
 from adapters.tools.registry import ToolRegistry
 from adapters.tools.shell import ShellTool
 from adapters.tools.web import WebFetchTool, WebSearchTool
+from application.browser_runtime import BrowserControlManager, BrowserManager, BrowserService
+from application.browser_streaming import BrowserFrameStreamer
 from application.execution import ActionExecutor, ContextBuilder, ContextCompressor, ExecutionEngine, SubagentCoordinator
 from application.orchestrator import Orchestrator
 from application.planning import PlanningService
@@ -40,12 +45,27 @@ class ManagementContainer:
 
 
 @dataclass(slots=True)
+class BrowserRuntimeContainer:
+    provider: PlaywrightBrowserProvider
+    events: InMemoryBrowserEventHub
+    manager: BrowserManager
+    control: BrowserControlManager
+    service: BrowserService
+    streamer: BrowserFrameStreamer
+    tokens: BrowserSessionTokenService
+
+    async def close(self) -> None:
+        await self.streamer.close()
+        await self.manager.close_all()
+
+
+@dataclass(slots=True)
 class RuntimeContainer(ManagementContainer):
     orchestrator: Orchestrator
     memory: SqliteMemoryAdapter
     sessions: SqliteSessionStore
     tools: ToolRegistry
-    browser_session: BrowserSession
+    browser_runtime: BrowserRuntimeContainer
 
 
 def _build_provider(settings: Settings) -> ModelProviderPort:
@@ -90,11 +110,39 @@ def build_management(
     return ManagementContainer(approvals=approval_service, audit=audit, artifacts=artifact_store)
 
 
+def build_browser_runtime(settings: Settings = default_settings) -> BrowserRuntimeContainer:
+    provider = PlaywrightBrowserProvider()
+    events = InMemoryBrowserEventHub()
+    manager = BrowserManager(
+        provider,
+        viewport={"width": settings.browser_viewport_width, "height": settings.browser_viewport_height},
+        timeout_seconds=settings.browser_session_timeout_seconds,
+        max_sessions=settings.browser_max_sessions,
+    )
+    control = BrowserControlManager()
+    service = BrowserService(manager, control, provider, events)
+    streamer = BrowserFrameStreamer(service, settings.browser_frame_interval_ms)
+    tokens = BrowserSessionTokenService(
+        settings.browser_session_secret,
+        ttl_seconds=settings.browser_token_ttl_seconds,
+    )
+    return BrowserRuntimeContainer(
+        provider=provider,
+        events=events,
+        manager=manager,
+        control=control,
+        service=service,
+        streamer=streamer,
+        tokens=tokens,
+    )
+
+
 def build_runtime(
     settings: Settings = default_settings,
     *,
     provider: ModelProviderPort | None = None,
     approvals: list[str] | None = None,
+    browser_runtime: BrowserRuntimeContainer | None = None,
 ) -> RuntimeContainer:
     """Composition root: the only place that chooses concrete adapters."""
     settings.prepare_directories()
@@ -107,7 +155,7 @@ def build_runtime(
     approval_service = management.approvals
     memory = SqliteMemoryAdapter(settings.memory_db)
     sessions = SqliteSessionStore(settings.session_db)
-    browser_session = BrowserSession(settings.artifacts_dir)
+    browser_runtime = browser_runtime or build_browser_runtime(settings)
     tools = ToolRegistry(audit=audit)
     for tool in (
         FileListTool(settings.workspace),
@@ -117,12 +165,12 @@ def build_runtime(
         ShellTool(settings.workspace, risk, approval_service, legacy_approvals),
         WebSearchTool(settings.web_user_agent),
         WebFetchTool(settings.web_user_agent),
-        PlaywrightBrowserTool(browser_session, approval_service),
         GitTool(settings.workspace, risk, approval_service),
         GitHubRestTool(settings.github_token, settings.github_api_base, approval_service),
         DockerDeploymentTool(settings.workspace, approval_service),
         ArtifactTool(artifact_store),
         ApprovalStatusTool(approval_service),
+        *browser_tools(browser_runtime.service),
     ):
         tools.register(tool)
     database = _build_database(settings.database_url)
@@ -150,5 +198,5 @@ def build_runtime(
         memory=memory,
         sessions=sessions,
         tools=tools,
-        browser_session=browser_session,
+        browser_runtime=browser_runtime,
     )
