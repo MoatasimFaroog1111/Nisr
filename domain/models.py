@@ -12,6 +12,7 @@ class AgentMode(str, Enum):
     RESEARCH = "RESEARCH"
     PLANNING = "PLANNING"
     EXECUTION = "EXECUTION"
+    WAITING_APPROVAL = "WAITING_APPROVAL"
     VERIFICATION = "VERIFICATION"
     DEBUGGING = "DEBUGGING"
     RECOVERY = "RECOVERY"
@@ -28,6 +29,7 @@ class RiskLevel(str, Enum):
 class TaskStatus(str, Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
+    WAITING_APPROVAL = "waiting_approval"
     COMPLETED = "completed"
     BLOCKED = "blocked"
 
@@ -87,6 +89,7 @@ class AgentState(BaseModel):
     user_approvals: list[str] = Field(default_factory=list)
     pending_approvals: list[dict[str, Any]] = Field(default_factory=list)
     step_count: int = 0
+    resume_count: int = 0
     final_result: str | None = None
 
 
