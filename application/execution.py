@@ -68,7 +68,8 @@ class ContextCompressor:
             return compacted
 
         compacted = [self._shorten(dict(row), 350) for row in older] + [dict(row) for row in recent]
-        while len(compacted) > self._preserve_recent and len(
+        minimum_rows = self._preserve_recent + (1 if older else 0)
+        while len(compacted) > minimum_rows and len(
             json.dumps(compacted, ensure_ascii=False, default=str)
         ) > effective_budget:
             compacted.pop(0)
