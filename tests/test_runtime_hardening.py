@@ -1,24 +1,7 @@
 from pathlib import Path
 
-import pytest
-
-from adapters.browser.playwright import PlaywrightBrowserTool
 from api.errors import _upstream_classification
-
-
-class _FailingBrowserSession:
-    page = None
-
-    async def ensure(self):
-        raise RuntimeError("chromium missing")
-
-    async def close(self):
-        return None
-
-
-class _Approvals:
-    def authorize_or_request(self, *args, **kwargs):
-        return True, None
+from adapters.browser.playwright_provider import PlaywrightBrowserProvider
 
 
 def test_upstream_error_classification_is_structured():
@@ -27,13 +10,13 @@ def test_upstream_error_classification_is_structured():
     assert _upstream_classification(500)[:2] == (502, "upstream_service_error")
 
 
-@pytest.mark.asyncio
-async def test_browser_runtime_failure_becomes_tool_result():
-    tool = PlaywrightBrowserTool(_FailingBrowserSession(), _Approvals())
-    result = await tool.run({"operation": "open", "url": "https://example.com"})
-    assert not result.ok
-    assert "Browser operation failed" in result.error
-    assert result.metadata["error_type"] == "RuntimeError"
+def test_browser_provider_blocks_obvious_local_targets():
+    assert not PlaywrightBrowserProvider._url_allowed("file:///etc/passwd")
+    assert not PlaywrightBrowserProvider._url_allowed("http://localhost:8000")
+    assert not PlaywrightBrowserProvider._url_allowed("http://127.0.0.1")
+    assert not PlaywrightBrowserProvider._url_allowed("http://169.254.169.254/latest/meta-data")
+    assert not PlaywrightBrowserProvider._url_allowed("http://10.0.0.8")
+    assert PlaywrightBrowserProvider._url_allowed("https://example.com")
 
 
 def test_railway_image_installs_browser_runtime():
