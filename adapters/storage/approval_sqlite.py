@@ -159,7 +159,7 @@ class ApprovalService:
             return {
                 "request_id": existing["request_id"],
                 "status": existing["status"],
-                "token": existing["token"],
+                "token": None,
                 "risk": risk.value,
                 "expires_at": existing["expires_at"],
             }
