@@ -191,3 +191,36 @@ class Orchestrator:
             self._save(state, "resuming")
 
         return await self._continue(state, state.step_count + self._max_steps)
+
+    def deny(self, session_id: str, denied_request_id: str) -> AgentState:
+        if not self._sessions:
+            raise RuntimeError("Session persistence is not configured")
+        state = self._sessions.load(session_id)
+        if not state:
+            raise KeyError("Unknown agent session")
+
+        state.pending_approvals = [
+            request
+            for request in state.pending_approvals
+            if request.get("request_id") != denied_request_id
+        ]
+        if state.current_task:
+            for task in state.plan.tasks:
+                if task.id == state.current_task:
+                    task.status = TaskStatus.BLOCKED
+                    break
+            if state.current_task not in state.blocked_tasks:
+                state.blocked_tasks.append(state.current_task)
+        state.mode = AgentMode.DELIVERY
+        state.final_result = "Approval denied. The protected action was not executed."
+        state.evidence.append(
+            f"Approval {denied_request_id} was denied; the protected action was not executed."
+        )
+        self._save(state, "denied")
+        if self._audit:
+            self._audit.record(
+                "agent.approval_denied",
+                session_id=state.session_id,
+                data={"approval_request_id": denied_request_id, "task": state.current_task},
+            )
+        return state
