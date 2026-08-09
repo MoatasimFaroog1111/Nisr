@@ -105,12 +105,20 @@ def _request_user_id(request: Request) -> str | None:
     return request.cookies.get(USER_COOKIE)
 
 
+def _session_visible_to_request(state, user_id: str | None) -> bool:
+    if not state:
+        return False
+    if state.user_id == "api":
+        return user_id is None
+    return bool(user_id and state.user_id == user_id)
+
+
 def _assert_session_owner(container, request_id: str, user_id: str | None) -> str | None:
     session_id = container.sessions.find_session_by_approval(request_id)
     if not session_id:
         return None
     state = container.sessions.load(session_id)
-    if user_id and state and state.user_id != user_id:
+    if state and not _session_visible_to_request(state, user_id):
         raise HTTPException(status_code=403, detail="Approval belongs to a different user session")
     return session_id
 
@@ -121,15 +129,13 @@ async def approvals(request: Request, status: str | None = None, limit: int = 10
     container = build_runtime(browser_runtime=browser_runtime)
     rows = container.approvals.list(status, limit)
     user_id = _request_user_id(request)
-    if not user_id:
-        return rows
     visible = []
     for row in rows:
         session_id = container.sessions.find_session_by_approval(row["request_id"])
         if not session_id:
             continue
         state = container.sessions.load(session_id)
-        if state and state.user_id == user_id:
+        if _session_visible_to_request(state, user_id):
             visible.append(row)
     return visible
 
