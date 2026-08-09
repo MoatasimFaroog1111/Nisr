@@ -1,12 +1,34 @@
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
 from pydantic import BaseModel
 
 load_dotenv()
+
+
+_INSECURE_SECRET_PLACEHOLDERS = {
+    "",
+    "change-me-in-production",
+    "replace-with-a-long-random-secret",
+    "replace-with-a-different-long-random-secret",
+}
+
+
+def _browser_session_secret() -> str:
+    explicit = os.getenv("AGENT_BROWSER_SESSION_SECRET", "").strip()
+    if explicit not in _INSECURE_SECRET_PLACEHOLDERS:
+        return explicit
+    approval = os.getenv("AGENT_APPROVAL_SECRET", "").strip()
+    if approval not in _INSECURE_SECRET_PLACEHOLDERS:
+        return approval
+    # Browser sessions are process-local today, so a per-process secret is safer
+    # than silently accepting a public placeholder. Configure the env var when
+    # multi-instance/shared-token continuity is required.
+    return secrets.token_urlsafe(48)
 
 
 class Settings(BaseModel):
@@ -19,10 +41,7 @@ class Settings(BaseModel):
     approval_db: Path = Path(os.getenv("AGENT_APPROVAL_DB", "./data/approvals.sqlite3")).resolve()
     session_db: Path = Path(os.getenv("AGENT_SESSION_DB", "./data/sessions.sqlite3")).resolve()
     approval_secret: str = os.getenv("AGENT_APPROVAL_SECRET", "change-me-in-production")
-    browser_session_secret: str = os.getenv(
-        "AGENT_BROWSER_SESSION_SECRET",
-        os.getenv("AGENT_APPROVAL_SECRET", "change-me-in-production"),
-    )
+    browser_session_secret: str = _browser_session_secret()
     browser_token_ttl_seconds: int = int(os.getenv("AGENT_BROWSER_TOKEN_TTL_SECONDS", "3600"))
     browser_session_timeout_seconds: int = int(os.getenv("AGENT_BROWSER_SESSION_TIMEOUT_SECONDS", "1200"))
     browser_cleanup_interval_seconds: int = int(os.getenv("AGENT_BROWSER_CLEANUP_INTERVAL_SECONDS", "30"))
