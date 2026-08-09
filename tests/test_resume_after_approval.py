@@ -26,9 +26,8 @@ def make_settings(tmp_path):
     )
 
 
-@pytest.mark.asyncio
-async def test_approval_resumes_same_durable_session(tmp_path):
-    provider = MockModelAdapter([
+def approval_provider():
+    return MockModelAdapter([
         json.dumps({
             "tasks": [{
                 "id": "t1",
@@ -48,6 +47,11 @@ async def test_approval_resumes_same_durable_session(tmp_path):
         }),
         json.dumps({"action": "finish", "result": "Approved write completed"}),
     ])
+
+
+@pytest.mark.asyncio
+async def test_approval_resumes_same_durable_session(tmp_path):
+    provider = approval_provider()
     settings = make_settings(tmp_path)
 
     first_runtime = build_runtime(settings, provider=provider)
@@ -76,6 +80,26 @@ async def test_approval_resumes_same_durable_session(tmp_path):
     assert resumed.completed_tasks == ["t1"]
     assert resumed.final_result == "Approved write completed"
     assert (settings.workspace / "approved.txt").read_text(encoding="utf-8") == "approved"
+
+
+@pytest.mark.asyncio
+async def test_denial_closes_same_session_without_executing_action(tmp_path):
+    provider = approval_provider()
+    settings = make_settings(tmp_path)
+    runtime = build_runtime(settings, provider=provider)
+    paused = await runtime.orchestrator.run("Write approved.txt only after approval")
+    request_id = paused.pending_approvals[0]["request_id"]
+
+    runtime.approvals.deny(request_id)
+    denied = runtime.orchestrator.deny(paused.session_id, request_id)
+
+    assert denied.session_id == paused.session_id
+    assert denied.mode == AgentMode.DELIVERY
+    assert denied.pending_approvals == []
+    assert denied.blocked_tasks == ["t1"]
+    assert denied.plan.tasks[0].status == TaskStatus.BLOCKED
+    assert denied.final_result == "Approval denied. The protected action was not executed."
+    assert not (settings.workspace / "approved.txt").exists()
 
 
 def test_session_store_round_trip_and_approval_link(tmp_path):
