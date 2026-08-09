@@ -28,6 +28,7 @@ ROLE_PROMPTS = {
 class TaskExecutionOutcome:
     finished: bool
     result: str | None = None
+    waiting_approval: bool = False
 
 
 class ContextCompressor:
@@ -123,8 +124,16 @@ class ActionExecutor:
             if changed:
                 state.changed_artifacts.append(str(changed))
             request = result.metadata.get("approval_required") if result.metadata else None
-            if request and request not in state.pending_approvals:
-                state.pending_approvals.append(request)
+            if request:
+                pending = dict(request)
+                pending["tool"] = action.tool.name
+                pending["arguments"] = action.tool.arguments
+                if not any(item.get("request_id") == pending.get("request_id") for item in state.pending_approvals):
+                    state.pending_approvals.append(pending)
+                state.evidence.append(
+                    f"Execution paused for approval request {pending.get('request_id', 'unknown')}."
+                )
+                return TaskExecutionOutcome(False, waiting_approval=True)
             return TaskExecutionOutcome(False)
         if action.action == "delegate":
             if not action.subagent_task:
@@ -180,6 +189,6 @@ class ExecutionEngine:
                 state.evidence.append(f"Invalid model action: {exc}")
                 continue
             outcome = await self._executor.execute(action, state, context)
-            if outcome.finished:
+            if outcome.waiting_approval or outcome.finished:
                 return outcome
         return TaskExecutionOutcome(False)
