@@ -4,7 +4,7 @@ import math
 import re
 from dataclasses import dataclass
 
-from ports.provider_telemetry import ProviderCallMetrics
+from domain.provider import ProviderCallMetrics
 
 
 _DURATION_PART = re.compile(r"([0-9]*\.?[0-9]+)(ms|s|m|h)")
@@ -37,11 +37,7 @@ class _BudgetState:
 
 
 class RunTokenBudgetManager:
-    """Vendor-neutral soft budget and proactive throttle for one agent session.
-
-    The budget does not know HTTP or OpenAI headers. Adapters normalize those into
-    ProviderCallMetrics before they reach this application service.
-    """
+    """Vendor-neutral soft budget, context guard, and adaptive concurrency policy."""
 
     def __init__(
         self,
@@ -98,17 +94,34 @@ class RunTokenBudgetManager:
     def context_budget_chars(self, session_id: str, configured_chars: int) -> int:
         state = self._state(session_id)
         configured = max(self._min_context_chars, int(configured_chars))
-
         run_remaining = max(0, self._run_token_budget - state.total_tokens)
         usable_tokens = run_remaining
         if state.remaining_tokens is not None:
             provider_remaining = max(0, state.remaining_tokens - self._provider_token_reserve)
             usable_tokens = min(usable_tokens, provider_remaining)
-
         dynamic_chars = int(usable_tokens * self._chars_per_token * self._context_safety_ratio)
         if dynamic_chars <= 0:
             return self._min_context_chars
         return min(configured, max(self._min_context_chars, dynamic_chars))
+
+    def recommended_parallelism(self, session_id: str, requested: int) -> int:
+        requested = max(1, int(requested))
+        state = self._state(session_id)
+        headroom = max(0.0, (self._run_token_budget - state.total_tokens) / self._run_token_budget)
+
+        if state.limit_tokens and state.remaining_tokens is not None:
+            usable_provider_tokens = max(0, state.remaining_tokens - self._provider_token_reserve)
+            headroom = min(headroom, usable_provider_tokens / max(1, state.limit_tokens))
+        if state.limit_requests and state.remaining_requests is not None:
+            headroom = min(headroom, state.remaining_requests / max(1, state.limit_requests))
+
+        if headroom <= 0.15:
+            return 1
+        if headroom <= 0.30:
+            return min(2, requested)
+        if headroom <= 0.50:
+            return min(3, requested)
+        return requested
 
     def snapshot(self, session_id: str) -> dict:
         state = self._state(session_id)
