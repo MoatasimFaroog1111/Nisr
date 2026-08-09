@@ -98,6 +98,24 @@ async function approveAndResume(requestId) {
   }
 }
 
+async function denyAndClose(requestId) {
+  store.set({ busy: true });
+  try {
+    const response = await api.deny(requestId);
+    if (response.state) {
+      applyResult(response.state, "Stopped after denial");
+      toast("Approval denied. The protected action was not executed.");
+    } else {
+      store.set({ busy: false });
+      toast("Approval denied");
+    }
+    await Promise.allSettled([loadApprovals(), loadAudit()]);
+  } catch (error) {
+    store.set({ busy: false });
+    toast(`Deny failed: ${error.message}`, "error");
+  }
+}
+
 function bindEvents() {
   document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", async () => {
     const view = button.dataset.view;
@@ -122,8 +140,7 @@ function bindEvents() {
     await approveAndResume(button.dataset.approve);
   }));
   document.querySelectorAll("[data-deny]").forEach(button => button.addEventListener("click", async () => {
-    try { await api.deny(button.dataset.deny); toast("Approval denied"); await loadApprovals(); }
-    catch (error) { toast(error.message, "error"); }
+    await denyAndClose(button.dataset.deny);
   }));
 
   const form = document.querySelector("#objective-form");
