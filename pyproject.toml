@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "super-agent-production"
+version = "0.2.0"
+description = "A modular autonomous agent runtime with planning, tools, memory, subagents, verification, and risk gating."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.112,<1",
+  "uvicorn>=0.30,<1",
+  "pydantic>=2.8,<3",
+  "httpx>=0.27,<1",
+  "python-dotenv>=1.0,<2"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "pytest-asyncio>=0.23,<1"]
+browser = ["playwright>=1.46,<2"]
+database = ["psycopg[binary]>=3.2,<4"]
+all = ["playwright>=1.46,<2", "psycopg[binary]>=3.2,<4"]
+
+[project.scripts]
+super-agent = "super_agent.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["super_agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
