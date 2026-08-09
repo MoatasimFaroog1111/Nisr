@@ -29,6 +29,8 @@ class TaskExecutionOutcome:
     finished: bool
     result: str | None = None
     waiting_approval: bool = False
+    waiting_user: bool = False
+    waiting_reason: str | None = None
 
 
 class ContextCompressor:
@@ -72,6 +74,8 @@ class ContextBuilder:
             f"OBJECTIVE:\n{state.objective}\n\n"
             f"CONSTRAINTS:\n{state.constraints}\n\n"
             f"MODE:\n{state.mode.value}\n\n"
+            f"RUN STATUS:\n{state.run_status.value}\n\n"
+            f"WAITING REASON:\n{state.waiting_reason}\n\n"
             f"PLAN:\n{state.plan.model_dump_json(indent=2)}\n\n"
             f"CURRENT TASK:\n{state.current_task}\n\n"
             f"RECENT EVIDENCE:\n{evidence}\n\n"
@@ -117,8 +121,23 @@ class ActionExecutor:
             if not action.tool:
                 state.evidence.append("Tool action missing tool payload.")
                 return TaskExecutionOutcome(False)
-            result = await self._tools.call(action.tool.name, action.tool.arguments, session_id=state.session_id)
-            row = {"tool": action.tool.name, "arguments": action.tool.arguments, "ok": result.ok, "output": result.output, "error": result.error, "metadata": result.metadata}
+            result = await self._tools.call(
+                action.tool.name,
+                action.tool.arguments,
+                session_id=state.session_id,
+                user_id=state.user_id,
+                task_id=state.current_task or "",
+                actor="agent",
+            )
+            safe_arguments = self._tools.sanitize(action.tool.name, action.tool.arguments)
+            row = {
+                "tool": action.tool.name,
+                "arguments": safe_arguments,
+                "ok": result.ok,
+                "output": result.output,
+                "error": result.error,
+                "metadata": result.metadata,
+            }
             state.tool_results.append(row)
             changed = result.metadata.get("changed_artifact") if result.metadata else None
             if changed:
@@ -127,13 +146,19 @@ class ActionExecutor:
             if request:
                 pending = dict(request)
                 pending["tool"] = action.tool.name
-                pending["arguments"] = action.tool.arguments
+                pending["arguments"] = safe_arguments
                 if not any(item.get("request_id") == pending.get("request_id") for item in state.pending_approvals):
                     state.pending_approvals.append(pending)
                 state.evidence.append(
                     f"Execution paused for approval request {pending.get('request_id', 'unknown')}."
                 )
                 return TaskExecutionOutcome(False, waiting_approval=True)
+            waiting_user = bool(result.metadata.get("waiting_user")) if result.metadata else False
+            if waiting_user:
+                reason = str(result.metadata.get("reason") or result.error or "User input is required")[:500]
+                state.waiting_reason = reason
+                state.evidence.append("Browser execution paused because user input is required.")
+                return TaskExecutionOutcome(False, waiting_user=True, waiting_reason=reason)
             return TaskExecutionOutcome(False)
         if action.action == "delegate":
             if not action.subagent_task:
@@ -186,10 +211,17 @@ class ExecutionEngine:
         if action_payload.get("url") and not arguments.get("url"):
             arguments["url"] = action_payload["url"]
 
-        result = await self._tools.call(tool_name, arguments, session_id=state.session_id)
+        result = await self._tools.call(
+            tool_name,
+            arguments,
+            session_id=state.session_id,
+            user_id=state.user_id,
+            task_id=state.current_task or "",
+            actor="agent",
+        )
         state.tool_results.append({
             "tool": tool_name,
-            "arguments": arguments,
+            "arguments": self._tools.sanitize(tool_name, arguments),
             "ok": result.ok,
             "output": result.output,
             "error": result.error,
@@ -204,12 +236,16 @@ class ExecutionEngine:
         if next_request:
             request = dict(next_request)
             request["tool"] = tool_name
-            request["arguments"] = arguments
+            request["arguments"] = self._tools.sanitize(tool_name, arguments)
             if not any(item.get("request_id") == request.get("request_id") for item in state.pending_approvals):
                 state.pending_approvals.append(request)
             state.evidence.append("The resumed action still requires approval; execution paused again.")
             return TaskExecutionOutcome(False, waiting_approval=True)
 
+        if result.metadata.get("waiting_user") if result.metadata else False:
+            reason = str(result.metadata.get("reason") or result.error or "User input is required")[:500]
+            state.waiting_reason = reason
+            return TaskExecutionOutcome(False, waiting_user=True, waiting_reason=reason)
         if result.ok:
             state.evidence.append(f"Approved {tool_name} action executed successfully; continuing the task.")
         else:
@@ -232,6 +268,6 @@ class ExecutionEngine:
                 state.evidence.append(f"Invalid model action: {exc}")
                 continue
             outcome = await self._executor.execute(action, state, context)
-            if outcome.waiting_approval or outcome.finished:
+            if outcome.waiting_approval or outcome.waiting_user or outcome.finished:
                 return outcome
         return TaskExecutionOutcome(False)
