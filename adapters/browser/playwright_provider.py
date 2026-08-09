@@ -29,6 +29,20 @@ class PlaywrightBrowserProvider:
         "metadata.google.internal",
         "metadata.aws.internal",
     }
+    _SENSITIVE_CLICK_MARKERS = (
+        "confirm payment",
+        "submit payment",
+        "pay now",
+        "place order",
+        "complete purchase",
+        "confirm purchase",
+        "send money",
+        "transfer money",
+        "confirm transfer",
+        "verify identity",
+        "security verification",
+        "bank authentication",
+    )
 
     def __init__(self, *, launch_args: list[str] | None = None):
         self._launch_args = launch_args or ["--disable-dev-shm-usage"]
@@ -36,9 +50,33 @@ class PlaywrightBrowserProvider:
         self._browser = None
         self._sessions: dict[str, _PlaywrightSession] = {}
 
+    def _connected(self) -> bool:
+        try:
+            return bool(self._browser and self._browser.is_connected())
+        except Exception:
+            return False
+
+    async def _discard_runtime(self) -> None:
+        self._sessions.clear()
+        browser, playwright = self._browser, self._playwright
+        self._browser = None
+        self._playwright = None
+        if browser:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+        if playwright:
+            try:
+                await playwright.stop()
+            except Exception:
+                pass
+
     async def _ensure_runtime(self) -> None:
-        if self._browser:
+        if self._connected():
             return
+        if self._browser or self._playwright:
+            await self._discard_runtime()
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:
@@ -99,8 +137,9 @@ class PlaywrightBrowserProvider:
         return session.tab_ids[key]
 
     async def create_session(self, session_id: str, *, viewport: dict[str, int]) -> BrowserState:
-        if session_id in self._sessions:
+        if await self.has_session(session_id):
             return await self.view(session_id)
+        self._sessions.pop(session_id, None)
         await self._ensure_runtime()
         context = await self._browser.new_context(
             viewport={"width": int(viewport["width"]), "height": int(viewport["height"])},
@@ -114,7 +153,7 @@ class PlaywrightBrowserProvider:
         return await self._state(session_id, include_interactables=False)
 
     async def has_session(self, session_id: str) -> bool:
-        return session_id in self._sessions
+        return self._connected() and session_id in self._sessions
 
     async def _active(self, session_id: str):
         session = self._session(session_id)
@@ -145,8 +184,10 @@ class PlaywrightBrowserProvider:
                     active=candidate is page,
                 )
             )
+
         interactables: list[dict[str, Any]] = []
         sensitive_signals: list[str] = []
+        text_excerpt = ""
         if include_interactables and page.url != "about:blank":
             try:
                 snapshot = await page.evaluate(
@@ -201,14 +242,18 @@ class PlaywrightBrowserProvider:
                         if (/cc-number|cc-csc|cvv|cvc|card.?number|payment/.test(fingerprint)) signals.push('payment_or_card');
                       }
                       if (Array.from(document.querySelectorAll('iframe')).some(f => /recaptcha|hcaptcha|turnstile/i.test(f.src || ''))) signals.push('captcha');
-                      return { interactables, sensitiveSignals: [...new Set(signals)] };
+                      const bodyText = (document.body?.innerText || '').slice(0, 100000);
+                      return { interactables, sensitiveSignals: [...new Set(signals)], bodyText };
                     }
                     """
                 )
                 interactables = list(snapshot.get("interactables") or [])
                 sensitive_signals = list(snapshot.get("sensitiveSignals") or [])
+                if not sensitive_signals:
+                    text_excerpt = str(snapshot.get("bodyText") or "")[:100_000]
             except Exception:
                 pass
+
         try:
             title = await page.title()
         except Exception:
@@ -221,6 +266,7 @@ class PlaywrightBrowserProvider:
             tabs=tabs,
             viewport=session.viewport,
             interactables=interactables,
+            text_excerpt=text_excerpt,
             sensitive_signals=sensitive_signals,
         )
 
@@ -241,8 +287,17 @@ class PlaywrightBrowserProvider:
 
     async def click(self, session_id: str, selector: str) -> BrowserState:
         session, page = await self._active(session_id)
+        locator = page.locator(selector)
+        fingerprint = await locator.evaluate(
+            """el => [
+              el.innerText, el.textContent, el.getAttribute('aria-label'), el.getAttribute('title'),
+              el.getAttribute('name'), el.id, el.getAttribute('value')
+            ].filter(Boolean).join(' ').toLowerCase().slice(0, 1000)"""
+        )
+        if any(marker in str(fingerprint) for marker in self._SENSITIVE_CLICK_MARKERS):
+            raise SensitiveBrowserOperation("Payment, banking, identity, or security confirmation requires user control")
         before = len(session.context.pages)
-        await page.locator(selector).click(timeout=15_000)
+        await locator.click(timeout=15_000)
         pages = [p for p in session.context.pages if not p.is_closed()]
         if len(pages) > before:
             session.active_page = pages[-1]
@@ -354,20 +409,34 @@ class PlaywrightBrowserProvider:
             height=int(session.viewport["height"]),
         )
 
+    async def cdp_snapshot(self, session_id: str) -> dict[str, Any]:
+        """Optional Chromium diagnostics extension; callers stay behind the provider abstraction."""
+        _, page = await self._active(session_id)
+        cdp = await page.context.new_cdp_session(page)
+        try:
+            await cdp.send("Performance.enable")
+            metrics = await cdp.send("Performance.getMetrics")
+            history = await cdp.send("Page.getNavigationHistory")
+            return {
+                "metrics": metrics.get("metrics", []),
+                "current_index": history.get("currentIndex"),
+                "history_entries": history.get("entries", []),
+            }
+        finally:
+            await cdp.detach()
+
     async def close_session(self, session_id: str) -> None:
         session = self._sessions.pop(session_id, None)
         if session:
-            await session.context.close()
+            try:
+                await session.context.close()
+            except Exception:
+                pass
 
     async def close_all(self) -> None:
         for session_id in list(self._sessions):
             await self.close_session(session_id)
-        if self._browser:
-            await self._browser.close()
-        if self._playwright:
-            await self._playwright.stop()
-        self._browser = None
-        self._playwright = None
+        await self._discard_runtime()
 
     async def probe(self) -> dict[str, Any]:
         await self._ensure_runtime()
@@ -375,4 +444,5 @@ class PlaywrightBrowserProvider:
             "ok": True,
             "engine": "chromium",
             "version": self._browser.version if self._browser else None,
+            "cdp": True,
         }
