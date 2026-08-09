@@ -10,6 +10,7 @@ class BaseTool(ABC):
     name: str
     description: str
     sensitive_fields: frozenset[str] = frozenset()
+    audit_output: bool = True
 
     @abstractmethod
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
