@@ -187,26 +187,16 @@ class Orchestrator:
             raise KeyError("Unknown agent session")
 
         pending = next(
-            (
-                request
-                for request in state.pending_approvals
-                if request.get("request_id") == approved_request_id
-            ),
+            (request for request in state.pending_approvals if request.get("request_id") == approved_request_id),
             None,
         )
         state.user_approvals.extend(token for token in approvals if token not in state.user_approvals)
-        state.pending_approvals = [
-            request
-            for request in state.pending_approvals
-            if request.get("request_id") != approved_request_id
-        ]
+        state.pending_approvals = [request for request in state.pending_approvals if request.get("request_id") != approved_request_id]
         state.resume_count += 1
         state.final_result = None
         state.waiting_reason = None
         state.run_status = AgentRunStatus.RUNNING
-        state.evidence.append(
-            f"Approval {approved_request_id} granted; resuming the paused task."
-        )
+        state.evidence.append(f"Approval {approved_request_id} granted; resuming the paused task.")
 
         if state.current_task:
             for task in state.plan.tasks:
@@ -234,14 +224,14 @@ class Orchestrator:
 
         return await self._continue(state, state.step_count + self._max_steps)
 
-    async def resume_user(self, session_id: str, browser_observation: dict) -> AgentState:
+    async def resume_user(self, session_id: str, browser_observation: dict) -> AgentState | None:
         if not self._sessions:
             raise RuntimeError("Session persistence is not configured")
         state = self._sessions.load(session_id)
         if not state:
             raise KeyError("Unknown agent session")
         if state.mode != AgentMode.WAITING_USER and state.run_status != AgentRunStatus.WAITING_USER:
-            return state
+            return None
 
         state.resume_count += 1
         state.final_result = None
@@ -278,11 +268,7 @@ class Orchestrator:
         if not state:
             raise KeyError("Unknown agent session")
 
-        state.pending_approvals = [
-            request
-            for request in state.pending_approvals
-            if request.get("request_id") != denied_request_id
-        ]
+        state.pending_approvals = [request for request in state.pending_approvals if request.get("request_id") != denied_request_id]
         if state.current_task:
             for task in state.plan.tasks:
                 if task.id == state.current_task:
@@ -293,9 +279,7 @@ class Orchestrator:
         state.mode = AgentMode.DELIVERY
         state.run_status = AgentRunStatus.FAILED
         state.final_result = "Approval denied. The protected action was not executed."
-        state.evidence.append(
-            f"Approval {denied_request_id} was denied; the protected action was not executed."
-        )
+        state.evidence.append(f"Approval {denied_request_id} was denied; the protected action was not executed.")
         self._save(state, "denied")
         if self._audit:
             self._audit.record(
