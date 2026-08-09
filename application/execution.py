@@ -175,6 +175,49 @@ class ExecutionEngine:
         self._context_builder = context_builder
         self._parser = parser or ActionParser()
 
+    async def resume_approved_action(self, pending: dict[str, Any], state: AgentState) -> TaskExecutionOutcome:
+        tool_name = str(pending.get("tool", "")).strip()
+        if not tool_name:
+            state.evidence.append("Approved request had no resumable tool action; continuing with model recovery.")
+            return TaskExecutionOutcome(False)
+
+        arguments = dict(pending.get("arguments") or {})
+        action_payload = dict(pending.get("action_payload") or {})
+        if action_payload.get("url") and not arguments.get("url"):
+            arguments["url"] = action_payload["url"]
+
+        result = await self._tools.call(tool_name, arguments, session_id=state.session_id)
+        state.tool_results.append({
+            "tool": tool_name,
+            "arguments": arguments,
+            "ok": result.ok,
+            "output": result.output,
+            "error": result.error,
+            "metadata": result.metadata,
+            "resumed_action": True,
+        })
+        changed = result.metadata.get("changed_artifact") if result.metadata else None
+        if changed:
+            state.changed_artifacts.append(str(changed))
+
+        next_request = result.metadata.get("approval_required") if result.metadata else None
+        if next_request:
+            request = dict(next_request)
+            request["tool"] = tool_name
+            request["arguments"] = arguments
+            if not any(item.get("request_id") == request.get("request_id") for item in state.pending_approvals):
+                state.pending_approvals.append(request)
+            state.evidence.append("The resumed action still requires approval; execution paused again.")
+            return TaskExecutionOutcome(False, waiting_approval=True)
+
+        if result.ok:
+            state.evidence.append(f"Approved {tool_name} action executed successfully; continuing the task.")
+        else:
+            state.evidence.append(
+                f"Approved {tool_name} action failed during resume: {result.error}. Continuing with recovery context."
+            )
+        return TaskExecutionOutcome(False)
+
     async def execute_task(self, task: Task, state: AgentState, max_steps: int) -> TaskExecutionOutcome:
         while state.step_count < max_steps:
             state.step_count += 1
