@@ -10,7 +10,10 @@ function message(item) {
 
 function executionStrip(run) {
   if (!run) return `<div class="execution-strip"><span>Ready for a new objective</span></div>`;
-  return `<div class="execution-strip"><span><strong>${escapeHtml(run.run_status || run.mode || "READY")}</strong></span><span>Steps ${run.step_count ?? 0}</span><span>Completed ${run.completed_tasks?.length ?? 0}</span><span>Blocked ${run.blocked_tasks?.length ?? 0}</span>${run.session_id ? `<span>Session ${escapeHtml(shortId(run.session_id))}</span>` : ""}</div>`;
+  const budget = run.provider_budget || {};
+  const runTokens = Number.isFinite(budget.run_tokens_used) ? `<span>Tokens ${budget.run_tokens_used}/${budget.run_token_budget ?? "—"}</span>` : "";
+  const providerRemaining = Number.isFinite(budget.provider_remaining_tokens) ? `<span>TPM remaining ${budget.provider_remaining_tokens}</span>` : "";
+  return `<div class="execution-strip"><span><strong>${escapeHtml(run.run_status || run.mode || "READY")}</strong></span><span>Steps ${run.step_count ?? 0}</span><span>Completed ${run.completed_tasks?.length ?? 0}</span><span>Blocked ${run.blocked_tasks?.length ?? 0}</span>${runTokens}${providerRemaining}${run.session_id ? `<span>Session ${escapeHtml(shortId(run.session_id))}</span>` : ""}</div>`;
 }
 
 export function chatView(state) {

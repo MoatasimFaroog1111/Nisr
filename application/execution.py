@@ -7,11 +7,14 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from application.model_calls import complete_model
 from domain.contracts import ACTION_PROTOCOL, SYSTEM_PROMPT
 from domain.models import AgentAction, AgentState, SubagentRequest, Task
+from domain.provider import ModelCallContext
 from ports.audit import AuditPort
 from ports.memory import MemoryPort
 from ports.model_provider import ModelProviderPort
+from ports.token_budget import TokenBudgetPort
 from ports.tool import ToolRegistryPort
 
 
@@ -34,11 +37,15 @@ class TaskExecutionOutcome:
 
 
 class ContextCompressor:
-    """Pure application helper that bounds context without knowing storage/vendors."""
+    """Bounds older context while preserving the newest observations verbatim."""
 
     def __init__(self, budget_chars: int = 50_000, preserve_recent: int = 4):
         self._budget_chars = max(4_000, budget_chars)
         self._preserve_recent = max(1, preserve_recent)
+
+    @property
+    def budget_chars(self) -> int:
+        return self._budget_chars
 
     @staticmethod
     def _shorten(value: Any, max_chars: int = 1000) -> Any:
@@ -50,27 +57,67 @@ class ContextCompressor:
             return [ContextCompressor._shorten(v, max_chars) for v in value]
         return value
 
-    def compress_rows(self, rows: list[dict]) -> list[dict]:
+    def compress_rows(self, rows: list[dict], *, budget_chars: int | None = None) -> list[dict]:
         if not rows:
             return []
+        effective_budget = max(2_000, int(budget_chars or self._budget_chars))
         recent = rows[-self._preserve_recent :]
         older = rows[: -self._preserve_recent]
         compacted = [self._shorten(dict(row)) for row in older] + [dict(row) for row in recent]
-        serialized = json.dumps(compacted, ensure_ascii=False, default=str)
-        if len(serialized) <= self._budget_chars:
+        if len(json.dumps(compacted, ensure_ascii=False, default=str)) <= effective_budget:
             return compacted
-        compressed_older = [self._shorten(dict(row), 350) for row in older]
-        return compressed_older + [dict(row) for row in recent]
+
+        compacted = [self._shorten(dict(row), 350) for row in older] + [dict(row) for row in recent]
+        minimum_rows = self._preserve_recent + (1 if older else 0)
+        while len(compacted) > minimum_rows and len(
+            json.dumps(compacted, ensure_ascii=False, default=str)
+        ) > effective_budget:
+            compacted.pop(0)
+        return compacted
 
 
 class ContextBuilder:
-    def __init__(self, compressor: ContextCompressor):
+    def __init__(self, compressor: ContextCompressor, token_budget: TokenBudgetPort | None = None):
         self._compressor = compressor
+        self._token_budget = token_budget
+
+    @staticmethod
+    def _short_texts(values: list[Any], max_items: int, max_chars: int) -> list[str]:
+        output: list[str] = []
+        for value in values[-max_items:]:
+            text = str(value)
+            output.append(text if len(text) <= max_chars else text[:max_chars] + "...[compressed]")
+        return output
+
+    @staticmethod
+    def _compact_tool_description(raw: str) -> str:
+        try:
+            tools = json.loads(raw)
+        except Exception:
+            return raw
+        if not isinstance(tools, list):
+            return raw
+        compacted = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            row = dict(tool)
+            if isinstance(row.get("description"), str) and len(row["description"]) > 240:
+                row["description"] = row["description"][:240] + "...[compressed]"
+            compacted.append(row)
+        return json.dumps(compacted, ensure_ascii=False)
 
     def build(self, state: AgentState, memories: list[str], tools_description: str) -> str:
-        tool_results = self._compressor.compress_rows(state.tool_results[-16:])
+        dynamic_budget = (
+            self._token_budget.context_budget_chars(state.session_id, self._compressor.budget_chars)
+            if self._token_budget
+            else self._compressor.budget_chars
+        )
+        tool_results = self._compressor.compress_rows(
+            state.tool_results[-16:], budget_chars=max(2_000, dynamic_budget // 3)
+        )
         evidence = state.evidence[-24:]
-        return (
+        context = (
             f"OBJECTIVE:\n{state.objective}\n\n"
             f"CONSTRAINTS:\n{state.constraints}\n\n"
             f"MODE:\n{state.mode.value}\n\n"
@@ -83,6 +130,28 @@ class ContextBuilder:
             f"RELEVANT MEMORY:\n{memories}\n\n"
             f"AVAILABLE TOOLS:\n{tools_description}\n"
         )
+        if len(context) <= dynamic_budget:
+            return context
+
+        compact_evidence = self._short_texts(evidence, 12, 400)
+        compact_memories = self._short_texts(memories, 4, 500)
+        compact_tools = self._compact_tool_description(tools_description)
+        compact_results = self._compressor.compress_rows(
+            state.tool_results[-8:], budget_chars=max(2_000, dynamic_budget // 4)
+        )
+        return (
+            f"OBJECTIVE:\n{state.objective}\n\n"
+            f"CONSTRAINTS:\n{state.constraints}\n\n"
+            f"MODE:\n{state.mode.value}\n\n"
+            f"RUN STATUS:\n{state.run_status.value}\n\n"
+            f"WAITING REASON:\n{state.waiting_reason}\n\n"
+            f"PLAN:\n{state.plan.model_dump_json(indent=2)}\n\n"
+            f"CURRENT TASK:\n{state.current_task}\n\n"
+            f"RECENT EVIDENCE:\n{compact_evidence}\n\n"
+            f"RECENT TOOL RESULTS:\n{compact_results}\n\n"
+            f"RELEVANT MEMORY:\n{compact_memories}\n\n"
+            f"AVAILABLE TOOLS:\n{compact_tools}\n"
+        )
 
 
 class SubagentCoordinator:
@@ -90,15 +159,30 @@ class SubagentCoordinator:
         self._provider = provider
         self._semaphore = asyncio.Semaphore(max_parallel)
 
-    async def run(self, role: str, task: str, context: str) -> str:
+    async def run(self, role: str, task: str, context: str, *, session_id: str = "") -> str:
         async with self._semaphore:
             system = ROLE_PROMPTS.get(role, f"You are a specialist agent for role: {role}.")
             prompt = f"TASK:\n{task}\n\nCONTEXT:\n{context}\n\nReturn useful findings only."
-            return await self._provider.complete(prompt, system=system)
+            return await complete_model(
+                self._provider,
+                prompt,
+                system=system,
+                context=ModelCallContext(session_id=session_id, purpose=f"subagent:{role}"),
+            )
 
-    async def run_many(self, requests: list[SubagentRequest], context: str) -> list[dict[str, str]]:
+    async def run_many(
+        self,
+        requests: list[SubagentRequest],
+        context: str,
+        *,
+        session_id: str = "",
+    ) -> list[dict[str, str]]:
         async def one(req: SubagentRequest) -> dict[str, str]:
-            return {"role": req.role, "task": req.task, "result": await self.run(req.role, req.task, context)}
+            return {
+                "role": req.role,
+                "task": req.task,
+                "result": await self.run(req.role, req.task, context, session_id=session_id),
+            }
         return await asyncio.gather(*(one(req) for req in requests))
 
 
@@ -108,7 +192,13 @@ class ActionParser:
 
 
 class ActionExecutor:
-    def __init__(self, tools: ToolRegistryPort, memory: MemoryPort, subagents: SubagentCoordinator, audit: AuditPort | None = None):
+    def __init__(
+        self,
+        tools: ToolRegistryPort,
+        memory: MemoryPort,
+        subagents: SubagentCoordinator,
+        audit: AuditPort | None = None,
+    ):
         self._tools = tools
         self._memory = memory
         self._subagents = subagents
@@ -116,7 +206,11 @@ class ActionExecutor:
 
     async def execute(self, action: AgentAction, state: AgentState, context: str) -> TaskExecutionOutcome:
         if self._audit:
-            self._audit.record("agent.action", session_id=state.session_id, data={"action": action.action, "summary": action.thought_summary})
+            self._audit.record(
+                "agent.action",
+                session_id=state.session_id,
+                data={"action": action.action, "summary": action.thought_summary},
+            )
         if action.action == "tool":
             if not action.tool:
                 state.evidence.append("Tool action missing tool payload.")
@@ -164,14 +258,23 @@ class ActionExecutor:
             if not action.subagent_task:
                 state.evidence.append("Delegate action missing task.")
                 return TaskExecutionOutcome(False)
-            report = await self._subagents.run(action.subagent_role or "researcher", action.subagent_task, context)
+            report = await self._subagents.run(
+                action.subagent_role or "researcher",
+                action.subagent_task,
+                context,
+                session_id=state.session_id,
+            )
             state.evidence.append(f"Subagent report: {report}")
             return TaskExecutionOutcome(False)
         if action.action == "delegate_parallel":
             if not action.subagents:
                 state.evidence.append("Parallel delegate action missing subagents.")
                 return TaskExecutionOutcome(False)
-            reports = await self._subagents.run_many(action.subagents, context)
+            reports = await self._subagents.run_many(
+                action.subagents,
+                context,
+                session_id=state.session_id,
+            )
             for report in reports:
                 state.evidence.append(f"Parallel subagent [{report['role']}]: {report['result']}")
             return TaskExecutionOutcome(False)
@@ -192,7 +295,15 @@ class ActionExecutor:
 
 
 class ExecutionEngine:
-    def __init__(self, provider: ModelProviderPort, tools: ToolRegistryPort, memory: MemoryPort, action_executor: ActionExecutor, context_builder: ContextBuilder, parser: ActionParser | None = None):
+    def __init__(
+        self,
+        provider: ModelProviderPort,
+        tools: ToolRegistryPort,
+        memory: MemoryPort,
+        action_executor: ActionExecutor,
+        context_builder: ContextBuilder,
+        parser: ActionParser | None = None,
+    ):
         self._provider = provider
         self._tools = tools
         self._memory = memory
@@ -260,8 +371,16 @@ class ExecutionEngine:
             memories = self._memory.search(state.objective, limit=6)
             state.memories_read = memories
             context = self._context_builder.build(state, memories, self._tools.describe())
-            prompt = f"{ACTION_PROTOCOL}\n\nCURRENT TASK:\n{task.model_dump_json(indent=2)}\n\nRUNTIME CONTEXT:\n{context}\n"
-            raw = await self._provider.complete(prompt, system=SYSTEM_PROMPT)
+            prompt = (
+                f"{ACTION_PROTOCOL}\n\nCURRENT TASK:\n{task.model_dump_json(indent=2)}\n\n"
+                f"RUNTIME CONTEXT:\n{context}\n"
+            )
+            raw = await complete_model(
+                self._provider,
+                prompt,
+                system=SYSTEM_PROMPT,
+                context=ModelCallContext(session_id=state.session_id, purpose="agent_step"),
+            )
             try:
                 action = self._parser.parse(raw)
             except (json.JSONDecodeError, ValidationError) as exc:
