@@ -1,0 +1,1 @@
+Nisr v0.3 SOLID Ports & Adapters refactor staging marker.
