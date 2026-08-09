@@ -43,7 +43,9 @@ class SqliteSessionStore:
 
     def save(self, state: AgentState, status: str) -> None:
         now = datetime.now(timezone.utc).isoformat()
-        payload = state.model_dump_json()
+        snapshot = state.model_copy(deep=True)
+        snapshot.user_approvals = []
+        payload = snapshot.model_dump_json()
         with self._connect() as conn:
             existing = conn.execute(
                 "SELECT created_at FROM agent_sessions WHERE session_id=?",
