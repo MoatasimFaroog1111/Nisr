@@ -24,11 +24,27 @@ class BrowserSession:
             from playwright.async_api import async_playwright
         except ImportError as exc:
             raise RuntimeError(
-                'Browser automation requires: pip install -e ".[browser]" then playwright install chromium'
+                'Browser automation is not installed in this runtime. Install the "browser" extra and Chromium.'
             ) from exc
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=True)
-        self.page = await self._browser.new_page()
+        try:
+            self._browser = await self._playwright.chromium.launch(
+                headless=True,
+                args=["--disable-dev-shm-usage"],
+            )
+            self.page = await self._browser.new_page()
+        except Exception:
+            await self._playwright.stop()
+            self._playwright = None
+            raise
+
+    async def probe(self) -> dict[str, Any]:
+        await self.ensure()
+        return {
+            "ok": True,
+            "engine": "chromium",
+            "version": self._browser.version if self._browser else None,
+        }
 
     async def close(self) -> None:
         if self._browser:
@@ -112,4 +128,8 @@ class PlaywrightBrowserTool(BaseTool):
                 return ToolResult(ok=True, output={"url": page.url, "operation": operation})
             return ToolResult(ok=False, error="Unknown browser operation")
         except Exception as exc:
-            return ToolResult(ok=False, error=str(exc))
+            return ToolResult(
+                ok=False,
+                error=f"Browser operation failed: {exc}",
+                metadata={"error_type": type(exc).__name__, "operation": operation},
+            )
