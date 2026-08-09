@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 
+from application.model_calls import complete_model
 from domain.models import Plan, Task
-from ports.model_provider import ModelCallContext, ModelProviderPort
+from domain.provider import ModelCallContext
+from ports.model_provider import ModelProviderPort
 
 
 class PlanningService:
@@ -32,7 +34,8 @@ Return only JSON:
 }}
 Use 1 task if the objective is straightforward. Use multiple small verifiable tasks for complex work.
 """
-        raw = await self._provider.complete(
+        raw = await complete_model(
+            self._provider,
             prompt,
             system="You are a task planner. Return valid JSON only.",
             context=ModelCallContext(session_id=session_id, purpose="planning"),
