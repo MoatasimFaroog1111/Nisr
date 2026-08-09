@@ -3,13 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from api.errors import install_error_handlers
 from infrastructure.composition_root import build_management, build_runtime
+from infrastructure.readiness import readiness_snapshot
 
-app = FastAPI(title="Nisr", version="0.3.0")
+app = FastAPI(title="Nisr", version="0.3.1")
+install_error_handlers(app)
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
 if UI_DIR.exists():
@@ -32,7 +35,13 @@ async def home():
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "service": "nisr", "version": "0.3.0"}
+    return {"ok": True, "service": "nisr", "version": "0.3.1"}
+
+
+@app.get("/readiness")
+async def readiness():
+    snapshot = await readiness_snapshot()
+    return JSONResponse(status_code=200 if snapshot["ok"] else 503, content=snapshot)
 
 
 @app.post("/run")
