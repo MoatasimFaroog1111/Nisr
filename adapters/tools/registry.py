@@ -80,6 +80,9 @@ class ToolRegistry:
         except Exception as exc:
             result = ToolResult(ok=False, error=f"Unhandled tool error: {type(exc).__name__}: {exc}")
         if self._audit:
+            output_preview = None
+            if getattr(tool, "audit_output", True) and result.output is not None:
+                output_preview = str(result.output)[:2000]
             self._audit.record(
                 "tool.finish",
                 session_id=session_id,
@@ -88,7 +91,7 @@ class ToolRegistry:
                     "ok": result.ok,
                     "error": result.error,
                     "metadata": self._redact(result.metadata, frozenset()),
-                    "output_preview": str(result.output)[:2000] if result.output is not None else None,
+                    "output_preview": output_preview,
                     "actor": actor,
                     "task_id": task_id,
                 },
