@@ -31,7 +31,20 @@ Concrete technology lives here. LLM, database, browser, GitHub, deployment, stor
 
 ### API
 
-FastAPI is an outer delivery adapter and calls the composition root; it does not instantiate SQLite/OpenAI/GitHub classes directly.
+FastAPI is an outer delivery adapter and calls the composition root; it does not instantiate SQLite/OpenAI/GitHub classes directly. It also serves the browser interface from `/` and keeps Swagger available at `/docs`.
+
+### Web UI
+
+The browser interface under `ui/` is component-based and follows the same separation principles:
+
+- `ui/js/components/`: presentation-only components. They receive state and render markup; they do not call the backend directly.
+- `ui/js/services/api-client.js`: the single HTTP boundary for `/run`, `/health`, approvals, artifacts, and audit operations.
+- `ui/js/state/store.js`: client-side state management independent from individual components.
+- `ui/js/utils/`: formatting and escaping helpers.
+- `ui/js/app.js`: composition/controller layer that wires components, state, and services.
+- `ui/styles.css`: centralized white-and-bright-gold visual design system.
+
+No UI component is allowed to call `fetch()` directly. This boundary is enforced by `tests/test_ui.py`.
 
 ## Dependency constraints
 
@@ -41,5 +54,7 @@ FastAPI is an outer delivery adapter and calls the composition root; it does not
 4. Adapters may import domain and ports, but not application orchestration internals.
 5. Infrastructure may import all layers only for composition/wiring.
 6. API may call infrastructure composition and domain DTOs as needed.
+7. UI components may depend on UI utilities/components only; backend access must go through the API client service.
+8. UI state must remain outside presentation components.
 
-These rules are enforced by an architecture test.
+These rules are enforced by architecture and UI boundary tests.

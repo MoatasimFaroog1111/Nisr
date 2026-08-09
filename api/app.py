@@ -1,17 +1,33 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from infrastructure.composition_root import build_management, build_runtime
 
 app = FastAPI(title="Nisr", version="0.3.0")
+UI_DIR = Path(__file__).resolve().parent.parent / "ui"
+
+if UI_DIR.exists():
+    app.mount("/ui", StaticFiles(directory=str(UI_DIR)), name="ui")
 
 
 class RunRequest(BaseModel):
     objective: str
     constraints: list[str] = Field(default_factory=list)
     approvals: list[str] = Field(default_factory=list)
+
+
+@app.get("/", include_in_schema=False)
+async def home():
+    index = UI_DIR / "index.html"
+    if not index.exists():
+        raise HTTPException(status_code=503, detail="Nisr UI is not available in this deployment")
+    return FileResponse(index)
 
 
 @app.get("/health")
@@ -60,4 +76,3 @@ async def audit(limit: int = 100):
 @app.get("/artifacts")
 async def artifacts(limit: int = 100):
     return build_management().artifacts.list(limit)
-
