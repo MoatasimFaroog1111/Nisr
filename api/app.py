@@ -106,7 +106,22 @@ async def approve(request_id: str):
 @app.post("/approvals/{request_id}/deny")
 async def deny(request_id: str):
     build_management().approvals.deny(request_id)
-    return {"request_id": request_id, "status": "denied"}
+    container = build_runtime()
+    session_id = container.sessions.find_session_by_approval(request_id)
+    if not session_id:
+        return {
+            "request_id": request_id,
+            "status": "denied",
+            "resumed": False,
+        }
+    state = container.orchestrator.deny(session_id, request_id)
+    return {
+        "request_id": request_id,
+        "status": "denied",
+        "resumed": False,
+        "session_id": session_id,
+        "state": state.model_dump(mode="json"),
+    }
 
 
 @app.get("/audit")
