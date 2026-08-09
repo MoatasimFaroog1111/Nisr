@@ -14,6 +14,7 @@ from adapters.storage.approval_sqlite import ApprovalService, HmacApprovalTokenS
 from adapters.storage.artifact_filesystem import FileSystemArtifactAdapter
 from adapters.storage.audit_jsonl import JsonlAuditAdapter
 from adapters.storage.memory_sqlite import SqliteMemoryAdapter
+from adapters.storage.session_sqlite import SqliteSessionStore
 from adapters.tools.approval_status import ApprovalStatusTool
 from adapters.tools.artifact import ArtifactTool
 from adapters.tools.files import FileListTool, FileReadTool, FileSearchTool, FileWriteTool
@@ -42,6 +43,7 @@ class ManagementContainer:
 class RuntimeContainer(ManagementContainer):
     orchestrator: Orchestrator
     memory: SqliteMemoryAdapter
+    sessions: SqliteSessionStore
     tools: ToolRegistry
     browser_session: BrowserSession
 
@@ -70,27 +72,41 @@ def _build_database(url: str) -> DatabasePort | None:
     raise ValueError("Unsupported database URL scheme")
 
 
-def build_management(settings: Settings = default_settings) -> ManagementContainer:
+def build_management(
+    settings: Settings = default_settings,
+    presented_approvals: list[str] | None = None,
+) -> ManagementContainer:
     settings.prepare_directories()
     audit = JsonlAuditAdapter(settings.audit_log)
     artifact_store = FileSystemArtifactAdapter(settings.artifacts_dir)
     approval_repository = SqliteApprovalRepository(settings.approval_db)
     approval_tokens = HmacApprovalTokenService(settings.approval_secret)
-    approval_service = ApprovalService(approval_repository, approval_tokens, settings.auto_approve_low_risk)
+    approval_service = ApprovalService(
+        approval_repository,
+        approval_tokens,
+        settings.auto_approve_low_risk,
+        presented_approvals=presented_approvals,
+    )
     return ManagementContainer(approvals=approval_service, audit=audit, artifacts=artifact_store)
 
 
-def build_runtime(settings: Settings = default_settings, *, provider: ModelProviderPort | None = None, approvals: list[str] | None = None) -> RuntimeContainer:
+def build_runtime(
+    settings: Settings = default_settings,
+    *,
+    provider: ModelProviderPort | None = None,
+    approvals: list[str] | None = None,
+) -> RuntimeContainer:
     """Composition root: the only place that chooses concrete adapters."""
     settings.prepare_directories()
     provider = provider or _build_provider(settings)
     legacy_approvals = approvals or []
     risk = RiskPolicy()
-    management = build_management(settings)
+    management = build_management(settings, presented_approvals=legacy_approvals)
     audit = management.audit
     artifact_store = management.artifacts
     approval_service = management.approvals
     memory = SqliteMemoryAdapter(settings.memory_db)
+    sessions = SqliteSessionStore(settings.session_db)
     browser_session = BrowserSession(settings.artifacts_dir)
     tools = ToolRegistry(audit=audit)
     for tool in (
@@ -118,5 +134,21 @@ def build_runtime(settings: Settings = default_settings, *, provider: ModelProvi
     context = ContextBuilder(ContextCompressor(settings.context_budget_chars))
     action_executor = ActionExecutor(tools, memory, subagents, audit)
     execution = ExecutionEngine(provider, tools, memory, action_executor, context)
-    orchestrator = Orchestrator(planner, execution, verifier, max_steps=settings.max_steps, audit=audit)
-    return RuntimeContainer(orchestrator=orchestrator, approvals=approval_service, audit=audit, artifacts=artifact_store, memory=memory, tools=tools, browser_session=browser_session)
+    orchestrator = Orchestrator(
+        planner,
+        execution,
+        verifier,
+        max_steps=settings.max_steps,
+        audit=audit,
+        sessions=sessions,
+    )
+    return RuntimeContainer(
+        orchestrator=orchestrator,
+        approvals=approval_service,
+        audit=audit,
+        artifacts=artifact_store,
+        memory=memory,
+        sessions=sessions,
+        tools=tools,
+        browser_session=browser_session,
+    )
