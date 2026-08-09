@@ -70,7 +70,13 @@ class RuntimeContainer(ManagementContainer):
 
 def _build_provider(settings: Settings) -> ModelProviderPort:
     if settings.provider == "openai_compatible":
-        return OpenAICompatibleAdapter(settings.api_base, settings.api_key, settings.model)
+        return OpenAICompatibleAdapter(
+            settings.api_base,
+            settings.api_key,
+            settings.model,
+            max_retries=settings.provider_max_retries,
+            retry_base_seconds=settings.provider_retry_base_seconds,
+        )
     raise ValueError(f"Unsupported provider: {settings.provider}")
 
 
