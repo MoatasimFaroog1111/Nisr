@@ -6,8 +6,7 @@ import pytest
 from adapters.llm.openai_compatible import OpenAICompatibleAdapter
 from adapters.telemetry.provider_audit import AuditProviderTelemetry
 from application.token_budget import RunTokenBudgetManager
-from ports.model_provider import ModelCallContext
-from ports.provider_telemetry import ProviderCallMetrics
+from domain.provider import ModelCallContext, ProviderCallMetrics
 
 
 class TelemetryCollector:
@@ -83,9 +82,10 @@ async def test_provider_records_normalized_rate_limits_and_usage_without_payload
     assert snapshot["run_tokens_used"] == 128
     assert snapshot["provider_remaining_tokens"] == 28000
     assert snapshot["last_request_id"] == "req_test_123"
+    assert budget.recommended_parallelism("run-1", 6) == 6
 
 
-def test_budget_compresses_context_and_recommends_wait_near_provider_limit():
+def test_budget_compresses_waits_and_serializes_near_provider_limit():
     budget = RunTokenBudgetManager(
         run_token_budget=24_000,
         provider_token_reserve=4_000,
@@ -112,6 +112,7 @@ def test_budget_compresses_context_and_recommends_wait_near_provider_limit():
 
     assert budget.context_budget_chars("run-2", 50_000) == 8_000
     assert budget.preflight_delay_seconds("run-2", 3_000) == 1.5
+    assert budget.recommended_parallelism("run-2", 6) == 1
     snapshot = budget.snapshot("run-2")
     assert snapshot["run_tokens_remaining"] == 6_000
     assert snapshot["provider_remaining_tokens"] == 6_000
