@@ -1,0 +1,7 @@
+import { icon } from "./icons.js";
+import { escapeHtml, formatDate, shortId } from "../utils/format.js";
+
+export function approvalsView(state) {
+  const rows = state.approvals || [];
+  return `<section class="view ${state.activeView === "approvals" ? "active" : ""}" data-section="approvals"><div class="section-head"><div><h2>Approvals</h2><p>Explicit control for sensitive or state-changing actions.</p></div><button class="secondary-button" data-action="load-approvals">${icon("refresh")} Refresh</button></div><div class="card-list">${rows.length ? rows.map(row => `<div class="data-card"><div class="data-main"><div class="data-title">${escapeHtml(row.action_type || "Approval request")}</div><div class="data-sub">${escapeHtml(shortId(row.request_id))} · ${escapeHtml(row.risk || "unknown")} risk · expires ${escapeHtml(formatDate(row.expires_at))}</div></div><div class="data-actions">${row.status === "pending" ? `<button class="gold-button" data-approve="${escapeHtml(row.request_id)}">Approve</button><button class="secondary-button" data-deny="${escapeHtml(row.request_id)}">Deny</button>` : `<span class="chip ${row.status === "approved" ? "success" : "danger"}">${escapeHtml(row.status)}</span>`}</div></div>`).join("") : `<div class="empty">${icon("approvals")}<div>No approval requests.</div></div>`}</div></section>`;
+}
