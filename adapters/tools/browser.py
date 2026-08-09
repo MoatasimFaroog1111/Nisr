@@ -11,7 +11,7 @@ from ports.tool import ToolExecutionContext
 
 _DESCRIPTIONS = {
     "navigate": "Navigate the active browser tab to an HTTP(S) URL. args: url.",
-    "view": "Read current browser state, tabs, visible interactable elements, and sensitive-step signals.",
+    "view": "Read current browser state, tabs, visible interactable elements, safe page text, and sensitive-step signals.",
     "click": "Click an element in the active tab. args: selector.",
     "input": "Fill a non-sensitive field. args: selector, value. Password/OTP/payment fields require user takeover.",
     "pressKey": "Press a keyboard key or shortcut in the active tab. args: key.",
@@ -29,6 +29,7 @@ _DESCRIPTIONS = {
 
 class BrowserActionTool(BaseTool):
     sensitive_fields = frozenset({"value", "text"})
+    audit_output = False
 
     def __init__(self, action: str, service: BrowserService):
         if action not in _DESCRIPTIONS:
@@ -143,6 +144,7 @@ class LegacyBrowserTool(BaseTool):
     name = "browser"
     description = "Compatibility browser tool. Prefer browser.navigate/view/click/input/pressKey/scroll/selectOption/back/forward/refresh/getTabs/switchTab/closeTab."
     sensitive_fields = frozenset({"value", "text"})
+    audit_output = False
 
     _ALIASES = {
         "open": "navigate",
