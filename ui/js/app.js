@@ -48,16 +48,71 @@ async function loadAudit() {
   catch (error) { toast(`Could not load audit log: ${error.message}`, "error"); }
 }
 
+function resultMessage(result, label = "Verified result") {
+  const reply = result.final_result || result.evidence?.at(-1) || "Execution finished without a textual result.";
+  return {
+    role: "agent",
+    text: reply,
+    meta: { label, sessionId: result.session_id, mode: result.mode },
+  };
+}
+
+function applyResult(result, label = "Verified result") {
+  const waiting = result.mode === "WAITING_APPROVAL";
+  store.update(state => ({
+    ...state,
+    busy: false,
+    lastRun: result,
+    activeView: waiting ? "approvals" : "chat",
+    messages: [...state.messages, resultMessage(result, label)],
+  }));
+}
+
 async function runObjective(objective) {
   store.update(state => ({ ...state, busy: true, messages: [...state.messages, { role: "user", text: objective, meta: { label: "Objective" } }] }));
   try {
     const result = await api.run(objective, [], []);
-    const reply = result.final_result || result.evidence?.at(-1) || "Execution finished without a textual result.";
-    store.update(state => ({ ...state, busy: false, lastRun: result, messages: [...state.messages, { role: "agent", text: reply, meta: { label: "Verified result", sessionId: result.session_id, mode: result.mode } }] }));
+    applyResult(result);
     await Promise.allSettled([loadApprovals(), loadArtifacts(), loadAudit()]);
   } catch (error) {
     store.update(state => ({ ...state, busy: false, messages: [...state.messages, { role: "agent", text: `Execution failed: ${error.message}`, meta: { label: "Error" } }] }));
     toast(`Execution failed: ${error.message}`, "error");
+  }
+}
+
+async function approveAndResume(requestId) {
+  store.set({ busy: true });
+  try {
+    const response = await api.approve(requestId);
+    if (response.resumed && response.state) {
+      applyResult(response.state, "Resumed after approval");
+      toast("Approved. Nisr resumed the same session.");
+    } else {
+      store.set({ busy: false });
+      toast(response.message || "Approval granted");
+    }
+    await Promise.allSettled([loadApprovals(), loadArtifacts(), loadAudit()]);
+  } catch (error) {
+    store.set({ busy: false });
+    toast(`Approval failed: ${error.message}`, "error");
+  }
+}
+
+async function denyAndClose(requestId) {
+  store.set({ busy: true });
+  try {
+    const response = await api.deny(requestId);
+    if (response.state) {
+      applyResult(response.state, "Stopped after denial");
+      toast("Approval denied. The protected action was not executed.");
+    } else {
+      store.set({ busy: false });
+      toast("Approval denied");
+    }
+    await Promise.allSettled([loadApprovals(), loadAudit()]);
+  } catch (error) {
+    store.set({ busy: false });
+    toast(`Deny failed: ${error.message}`, "error");
   }
 }
 
@@ -82,12 +137,10 @@ function bindEvents() {
   document.querySelector('[data-action="load-audit"]')?.addEventListener("click", loadAudit);
 
   document.querySelectorAll("[data-approve]").forEach(button => button.addEventListener("click", async () => {
-    try { await api.approve(button.dataset.approve); toast("Approval granted"); await loadApprovals(); }
-    catch (error) { toast(error.message, "error"); }
+    await approveAndResume(button.dataset.approve);
   }));
   document.querySelectorAll("[data-deny]").forEach(button => button.addEventListener("click", async () => {
-    try { await api.deny(button.dataset.deny); toast("Approval denied"); await loadApprovals(); }
-    catch (error) { toast(error.message, "error"); }
+    await denyAndClose(button.dataset.deny);
   }));
 
   const form = document.querySelector("#objective-form");
