@@ -112,7 +112,6 @@ class BrowserManager:
             session
             for session in list(self._sessions.values())
             if now - session.last_activity >= self._timeout_seconds
-            and session.control_state != BrowserControlState.USER_CONTROL
         ]
         closed: list[BrowserSession] = []
         for session in expired:
@@ -200,18 +199,30 @@ class BrowserService:
         state.control_state = session.control_state
         return state
 
+    @staticmethod
+    def _state_event_data(state: BrowserState) -> dict[str, Any]:
+        return {
+            "url": state.url,
+            "title": state.title,
+            "loading": state.loading,
+            "owner": state.owner.value,
+            "control_state": state.control_state.value,
+            "tabs": [tab.model_dump(mode="json") for tab in state.tabs],
+        }
+
     async def _ensure(self, session: BrowserSession) -> BrowserState:
         was_started = session.browser_started and await self._provider.has_session(session.session_id)
         state = await self._manager.ensure_browser(session)
+        state = self._decorate(state, session)
         if not was_started:
             await self._publish(
                 "browser.started",
                 session,
                 actor="system",
                 message="Browser started",
-                data={"viewport": state.viewport},
+                data={"viewport": state.viewport, **self._state_event_data(state)},
             )
-        return self._decorate(state, session)
+        return state
 
     async def _agent_action(
         self,
@@ -242,24 +253,37 @@ class BrowserService:
                 await self.request_user_takeover(session_id, user_id, str(exc), task_id=task_id, already_locked=True)
                 raise
             except Exception as exc:
+                state_changed = False
+                recovery_error = None
+                try:
+                    if session.browser_started and not await self._provider.has_session(session.session_id):
+                        recovered = await self._manager.ensure_browser(session)
+                        self._decorate(recovered, session)
+                        state_changed = True
+                except Exception as recovery_exc:
+                    recovery_error = type(recovery_exc).__name__
                 await self._publish(
                     "browser.error",
                     session,
                     actor="agent",
                     message="Browser action failed",
-                    data={"action": action_name, "error_type": type(exc).__name__},
+                    data={
+                        "action": action_name,
+                        "error_type": type(exc).__name__,
+                        "browser_state_changed": state_changed,
+                        "recovery_error_type": recovery_error,
+                    },
                 )
                 raise
             session.last_activity = time.monotonic()
             state = self._decorate(state, session)
-            if state.url:
-                await self._publish(
-                    "browser.url_changed",
-                    session,
-                    actor="agent",
-                    message=state.url,
-                    data={"url": state.url, "title": state.title},
-                )
+            await self._publish(
+                "browser.url_changed",
+                session,
+                actor="agent",
+                message=state.url,
+                data=self._state_event_data(state),
+            )
             return state
 
     async def navigate(self, session_id: str, user_id: str, task_id: str | None, url: str) -> BrowserState:
@@ -282,7 +306,7 @@ class BrowserService:
             self._manager.get(session_id, user_id),
             actor="agent",
             message="Page loaded",
-            data={"url": state.url, "title": state.title},
+            data=self._state_event_data(state),
         )
         return state
 
@@ -405,7 +429,7 @@ class BrowserService:
                 session,
                 actor="user",
                 message="You have control of the browser.",
-                data={"owner": session.owner.value, "control_state": session.control_state.value},
+                data=self._state_event_data(state),
             )
             return state
 
@@ -421,13 +445,7 @@ class BrowserService:
                 session,
                 actor="user",
                 message="Control returned to agent.",
-                data={
-                    "owner": session.owner.value,
-                    "control_state": session.control_state.value,
-                    "url": state.url,
-                    "title": state.title,
-                    "tabs": [tab.model_dump(mode="json") for tab in state.tabs],
-                },
+                data=self._state_event_data(state),
             )
             return state
 
@@ -464,6 +482,14 @@ class BrowserService:
             elif action == "refresh":
                 state = await self._provider.refresh(session_id)
                 event_data = {"action": action}
+            elif action == "switchTab":
+                tab_id = str(payload.get("tab_id", ""))
+                state = await self._provider.switch_tab(session_id, tab_id)
+                event_data = {"action": action, "tab_id": tab_id}
+            elif action == "closeTab":
+                tab_id = str(payload.get("tab_id", ""))
+                state = await self._provider.close_tab(session_id, tab_id)
+                event_data = {"action": action, "tab_id": tab_id}
             else:
                 raise ValueError("Unsupported user browser action")
             session.last_activity = time.monotonic()
@@ -474,6 +500,13 @@ class BrowserService:
                 actor="user",
                 message="User interacted with browser",
                 data=event_data,
+            )
+            await self._publish(
+                "browser.url_changed",
+                session,
+                actor="user",
+                message=state.url,
+                data=self._state_event_data(state),
             )
             return state
 
