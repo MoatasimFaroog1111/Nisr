@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "super-agent-production"
-version = "0.2.0"
-description = "A modular autonomous agent runtime with planning, tools, memory, subagents, verification, and risk gating."
+name = "nisr-agent"
+version = "0.3.0"
+description = "Nisr: a SOLID, component-based autonomous agent runtime using Ports & Adapters architecture."
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.112,<1",
@@ -22,10 +22,11 @@ database = ["psycopg[binary]>=3.2,<4"]
 all = ["playwright>=1.46,<2", "psycopg[binary]>=3.2,<4"]
 
 [project.scripts]
-super-agent = "super_agent.cli:main"
+nisr = "infrastructure.cli:main"
+super-agent = "infrastructure.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["super_agent*"]
+include = ["domain*", "application*", "ports*", "adapters*", "infrastructure*", "api*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

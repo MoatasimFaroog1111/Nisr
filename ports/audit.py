@@ -1,0 +1,6 @@
+from __future__ import annotations
+from typing import Any, Protocol
+
+class AuditPort(Protocol):
+    def record(self, event: str, *, session_id: str = "", data: dict[str, Any] | None = None) -> None: ...
+    def tail(self, limit: int = 100) -> list[dict[str, Any]]: ...

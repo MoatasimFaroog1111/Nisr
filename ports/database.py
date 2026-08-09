@@ -1,0 +1,6 @@
+from __future__ import annotations
+from typing import Any, Protocol
+
+class DatabasePort(Protocol):
+    async def query(self, sql: str, params: list[Any]) -> list[dict[str, Any]]: ...
+    async def execute(self, sql: str, params: list[Any]) -> dict[str, Any]: ...

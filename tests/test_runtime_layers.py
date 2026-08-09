@@ -1,22 +1,15 @@
-from super_agent.config import Settings
-from super_agent.providers.mock import MockProvider
-from super_agent.runtime import build_runtime
+from adapters.llm.mock import MockModelAdapter
+from infrastructure.composition_root import build_management, build_runtime
+from infrastructure.settings import Settings
 
+def settings_for(tmp_path):
+    return Settings(provider="mock", model="mock", api_base="http://example.invalid", api_key="x", workspace=tmp_path / "workspace", memory_db=tmp_path / "memory.sqlite3", approval_db=tmp_path / "approvals.sqlite3", approval_secret="s", audit_log=tmp_path / "audit.jsonl", artifacts_dir=tmp_path / "artifacts", database_url=f"sqlite:///{tmp_path / 'db.sqlite3'}")
 
-def make_settings(tmp_path):
-    return Settings(
-        provider='mock', model='mock', api_base='http://example.invalid', api_key='x',
-        workspace=tmp_path/'workspace', memory_db=tmp_path/'memory.sqlite3',
-        approval_db=tmp_path/'approvals.sqlite3', approval_secret='secret',
-        audit_log=tmp_path/'audit.jsonl', artifacts_dir=tmp_path/'artifacts',
-        database_url=f'sqlite:///{tmp_path / "db.sqlite3"}', github_token='',
-        github_api_base='https://api.github.com', web_user_agent='test', max_steps=5,
-        context_budget_chars=20000, auto_approve_low_risk=True,
-    )
+def test_composition_root_registers_advanced_tools(tmp_path):
+    container = build_runtime(settings_for(tmp_path), provider=MockModelAdapter([]))
+    for expected in {"read_file","write_file","shell","web_search","browser","git","github","database","deployment","artifact","approval_status"}: assert expected in container.tools.names
 
-
-def test_advanced_tools_are_registered(tmp_path):
-    settings=make_settings(tmp_path); settings.workspace.mkdir(parents=True, exist_ok=True)
-    runtime=build_runtime(settings=settings, provider=MockProvider([]), approvals=[])
-    expected={'web_search','web_fetch','browser','git','github','database','deployment','artifact','approval_status'}
-    assert expected.issubset(set(runtime.router.names))
+def test_management_container_does_not_require_llm_credentials(tmp_path):
+    settings = settings_for(tmp_path); settings.api_key = ""; settings.model = ""
+    management = build_management(settings)
+    assert management.approvals.list() == []

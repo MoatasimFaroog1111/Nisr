@@ -1,49 +1,84 @@
-# Super Agent Production — v0.2
+# Nisr v0.3
 
-A modular autonomous agent runtime that combines planning, memory, tools, subagents, verification, approvals, auditing, artifacts, web research, browser automation, Git/GitHub, databases, and deployment adapters.
-
-## Added in v0.2
-
-- Web research: `web_search`, `web_fetch`
-- Browser automation: optional Playwright-backed `browser` tool
-- Git: status/diff/log/branch plus approval-gated writes
-- GitHub: repository/issues/PR reads plus approval-gated issue/comment writes
-- Database: SQLite built in; PostgreSQL optional; read-only query vs approval-gated execute
-- Deployment: plan/status plus approval-gated Docker build/run/stop
-- Parallel subagents: researcher/architect/coder/tester/debugger via `delegate_parallel`
-- Context compression: preserves recent detail and compresses older evidence/tool output to a configurable budget
-- Artifact manager: persistent manifest with SHA-256 and generated artifact storage
-- Approval system: persistent SQLite requests + HMAC-scoped approval tokens
-- Audit log: JSONL event trail with secret/token redaction
+Nisr is a modular autonomous-agent runtime refactored around **SOLID**, **component-based design**, and **Ports & Adapters (Hexagonal Architecture)**.
 
 ## Architecture
 
 ```text
-User / API / CLI
-       |
-       v
-+------------------------+
-| Orchestrator           |
-| Plan -> Act -> Verify  |
-+-----+----+----+---------+
-      |    |    |
-      |    |    +--> Context Compressor
-      |    +------> Memory + Artifact Manager
-      +-----------> Parallel Subagents
-                     |
-                     v
-               +-----------+
-               | ToolRouter|
-               +-----+-----+
-                     |
-  +-------+------+----+----+------+--------+--------+
-  | Files | Web  | Browser | Git | GitHub | DB     | Deploy
-  +-------+------+---------+-----+--------+--------+-------+
-                     |
-             Approval + Risk Gate
-                     |
-                  Audit Log
+Nisr/
+├── domain/
+│   ├── models.py
+│   └── contracts.py
+├── application/
+│   ├── orchestrator.py
+│   ├── execution.py
+│   ├── planning.py
+│   └── verification.py
+├── ports/
+│   ├── model_provider.py
+│   ├── memory.py
+│   ├── database.py
+│   ├── audit.py
+│   ├── approval.py
+│   ├── artifact.py
+│   └── tool.py
+├── adapters/
+│   ├── llm/
+│   ├── database/
+│   ├── browser/
+│   ├── github/
+│   ├── deployment/
+│   ├── storage/
+│   └── tools/
+├── infrastructure/
+│   ├── composition_root.py
+│   ├── settings.py
+│   └── cli.py
+└── api/
+    └── app.py
 ```
+
+## Dependency rule
+
+The direction is one-way:
+
+```text
+Domain <- Ports <- Application <- Infrastructure/Adapters/API
+```
+
+More precisely:
+
+- `domain` imports no application, adapter, API, or infrastructure code.
+- `application` depends only on `domain` and `ports`.
+- `ports` define contracts and contain no vendor implementations.
+- `adapters` implement the ports or tool contract for OpenAI-compatible LLMs, SQLite/PostgreSQL, Playwright, GitHub, Docker, filesystem, shell, Git, and web operations.
+- `infrastructure/composition_root.py` is the only module responsible for choosing concrete implementations and wiring them together.
+- `api` is a delivery adapter; it does not build business rules itself.
+
+## SOLID mapping
+
+- **SRP:** planning, execution, verification, orchestration, persistence, token signing, and vendor integrations are separated.
+- **OCP:** new LLM/database/tool adapters can be added without editing application use-cases.
+- **LSP:** concrete adapters satisfy small Protocol contracts.
+- **ISP:** separate ports exist for model, memory, database, audit, approvals, artifacts, and tools.
+- **DIP:** application services receive ports via constructor injection; no OpenAI/SQLite/GitHub/Docker imports exist in the application layer.
+
+## Components
+
+Nisr currently supports:
+
+- Planner and task lifecycle orchestration
+- Autonomous action execution
+- Multi-agent parallel delegation
+- Context compression
+- Persistent memory
+- Risk classification and approval gating
+- Audit logs with secret redaction
+- Artifact storage with SHA-256 manifests
+- File, shell, web, Git, browser, GitHub and deployment tools
+- SQLite and PostgreSQL database adapters
+- OpenAI-compatible model adapter
+- CLI and FastAPI delivery surfaces
 
 ## Quick start
 
@@ -51,53 +86,31 @@ User / API / CLI
 python -m venv .venv
 # Windows
 .venv\Scripts\activate
-# Linux/macOS: source .venv/bin/activate
+# Linux/macOS
+# source .venv/bin/activate
+
 pip install -e ".[dev]"
 ```
 
-Copy `.env.example` to `.env`, configure the model provider, then:
+Copy `.env.example` to `.env`, configure `AGENT_MODEL` and `AGENT_API_KEY`, then run:
 
 ```bash
-super-agent "Inspect this workspace and explain the architecture"
-uvicorn super_agent.api.app:app --host 0.0.0.0 --port 8000
+nisr "Inspect this workspace and explain the architecture"
 ```
 
-Optional browser/database adapters:
+API:
+
+```bash
+uvicorn api.app:app --host 0.0.0.0 --port 8000
+```
+
+Optional integrations:
 
 ```bash
 pip install -e ".[all]"
 playwright install chromium
 ```
 
-## Approval flow
+## Extending Nisr
 
-Mutating tools can return `metadata.approval_required` with a persistent `request_id`. Approve it through the API:
-
-```text
-POST /approvals/{request_id}/approve
-```
-
-The response contains an action-scoped `approval_token`. Pass it in the next `/run` request under `approvals` (or directly to a tool adapter). The runtime validates it against the exact pending action, so the model does not need to inspect or reproduce the token. Tokens are HMAC signed, time-limited, and payload-bound.
-
-## API endpoints
-
-- `GET /health`
-- `POST /run`
-- `GET /approvals`
-- `POST /approvals/{request_id}/approve`
-- `POST /approvals/{request_id}/deny`
-- `GET /audit`
-- `GET /artifacts`
-
-## Safety model
-
-- Read-only operations are generally low risk.
-- Workspace/source writes, Git mutations, browser interactions, DB mutations, GitHub writes, and deployments are approval-gated.
-- Catastrophic command patterns are blocked.
-- Audit records redact secrets and tokens.
-- Approval tokens are scoped to the exact action payload and expire.
-- Database `query` rejects SQL classified as mutating.
-
-## Notes
-
-Browser automation requires Playwright and Chromium. PostgreSQL support requires the optional database extra. GitHub writes require `AGENT_GITHUB_TOKEN`. The provider, tools, and deployment layer are intentionally adapter-based so additional vendors can be added without changing the orchestrator.
+To add another LLM, implement `ModelProviderPort` in `adapters/llm/` and wire it in the composition root. To add MySQL, implement `DatabasePort` in `adapters/database/`; `DatabaseTool` does not need modification. Other capabilities can be added as tools implementing the `ToolPort` shape and registered in the composition root.

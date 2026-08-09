@@ -1,1 +1,1 @@
-# Shared pytest configuration can be added here.
+# Shared pytest configuration.
