@@ -1,5 +1,5 @@
 {
-  "version": "0.3.0",
+  "version": "0.3.2",
   "layers": {
     "web_research": ["web_search", "web_fetch"],
     "browser_automation": ["browser"],
@@ -10,6 +10,7 @@
     "context_compression": ["ContextCompressor", "ContextBuilder"],
     "artifact_manager": ["artifact", "ArtifactPort"],
     "approval_system": ["ApprovalService", "ApprovalPort", "approval_status"],
+    "resumable_sessions": ["SessionStorePort", "SqliteSessionStore", "WAITING_APPROVAL"],
     "audit_log": ["AuditPort"]
   }
 }
