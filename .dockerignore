@@ -1,0 +1,17 @@
+.git
+.gitignore
+.github
+.env
+.venv
+__pycache__
+.pytest_cache
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+data
+artifacts
+workspace
+build
+dist
+*.egg-info
