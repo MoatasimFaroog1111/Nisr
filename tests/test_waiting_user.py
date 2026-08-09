@@ -43,7 +43,7 @@ def make_settings(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_agent_enters_waiting_user_and_preserves_session_for_resume(tmp_path):
+async def test_agent_enters_waiting_user_and_resumes_same_session_after_return_control(tmp_path):
     provider = MockModelAdapter([
         json.dumps({
             "tasks": [{
@@ -58,6 +58,11 @@ async def test_agent_enters_waiting_user_and_preserves_session_for_resume(tmp_pa
             "action": "tool",
             "thought_summary": "User verification is required",
             "tool": {"name": "need_user", "arguments": {}},
+        }),
+        json.dumps({
+            "action": "finish",
+            "thought_summary": "Verification is complete after user returned control",
+            "result": "Account verification completed.",
         }),
     ])
     settings = make_settings(tmp_path)
@@ -81,3 +86,21 @@ async def test_agent_enters_waiting_user_and_preserves_session_for_resume(tmp_pa
     assert stored is not None
     assert stored.user_id == "user-1"
     assert stored.mode == AgentMode.WAITING_USER
+
+    resumed = await runtime.orchestrator.resume_user(
+        "shared-session",
+        {
+            "url": "https://example.com/account",
+            "title": "Account",
+            "tabs": [{"id": "tab-1", "url": "https://example.com/account", "active": True}],
+            "control_state": "AGENT_CONTROL",
+        },
+    )
+
+    assert resumed.session_id == "shared-session"
+    assert resumed.resume_count == 1
+    assert resumed.run_status == AgentRunStatus.COMPLETED
+    assert resumed.mode == AgentMode.DELIVERY
+    assert resumed.final_result == "Account verification completed."
+    assert resumed.completed_tasks == ["t1"]
+    assert any(row.get("tool") == "browser.userObservation" for row in resumed.tool_results)
