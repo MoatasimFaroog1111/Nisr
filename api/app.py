@@ -28,7 +28,6 @@ async def lifespan(app: FastAPI):
             try:
                 await browser_runtime.service.cleanup_expired()
             except Exception:
-                # Viewer/session cleanup must never crash the API process.
                 pass
 
     cleanup_task = asyncio.create_task(cleanup_loop(), name="browser-session-cleanup")
@@ -40,7 +39,7 @@ async def lifespan(app: FastAPI):
         await browser_runtime.close()
 
 
-app = FastAPI(title="Nisr", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="Nisr", version="0.4.1", lifespan=lifespan)
 install_error_handlers(app)
 app.include_router(browser_router)
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
@@ -66,13 +65,13 @@ async def home():
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "service": "nisr", "version": "0.4.0"}
+    return {"ok": True, "service": "nisr", "version": "0.4.1"}
 
 
 @app.get("/readiness")
 async def readiness(request: Request):
     snapshot = await readiness_snapshot(settings, request.app.state.browser_runtime.provider)
-    snapshot["version"] = "0.4.0"
+    snapshot["version"] = "0.4.1"
     return JSONResponse(status_code=200 if snapshot["ok"] else 503, content=snapshot)
 
 
@@ -86,10 +85,7 @@ async def run_agent(payload: RunRequest, request: Request):
         browser_runtime, user_id = verify_run_browser_access(request, session_id, token)
         await browser_runtime.service.register_session(session_id, user_id)
 
-    container = build_runtime(
-        approvals=payload.approvals,
-        browser_runtime=browser_runtime,
-    )
+    container = build_runtime(approvals=payload.approvals, browser_runtime=browser_runtime)
     state = await container.orchestrator.run(
         payload.objective,
         payload.constraints,
@@ -164,9 +160,7 @@ async def approve(request_id: str, request: Request):
     resumed_container = build_runtime(approvals=[token], browser_runtime=browser_runtime)
     try:
         state = await resumed_container.orchestrator.resume(
-            session_id,
-            approvals=[token],
-            approved_request_id=request_id,
+            session_id, approvals=[token], approved_request_id=request_id
         )
         return {
             "request_id": request_id,
@@ -186,11 +180,7 @@ async def deny(request_id: str, request: Request):
     session_id = _assert_session_owner(container, request_id, _request_user_id(request))
     container.approvals.deny(request_id)
     if not session_id:
-        return {
-            "request_id": request_id,
-            "status": "denied",
-            "resumed": False,
-        }
+        return {"request_id": request_id, "status": "denied", "resumed": False}
     state = container.orchestrator.deny(session_id, request_id)
     return {
         "request_id": request_id,
