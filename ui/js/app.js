@@ -86,6 +86,17 @@ function addBrowserActivity(event) {
   updateBrowser({ activity });
 }
 
+function realtimeStatePatch(data = {}) {
+  return {
+    url: data.url ?? store.state.browser.state?.url,
+    title: data.title ?? store.state.browser.state?.title,
+    loading: data.loading ?? store.state.browser.state?.loading,
+    tabs: data.tabs ?? store.state.browser.state?.tabs,
+    owner: data.owner ?? store.state.browser.state?.owner,
+    control_state: data.control_state ?? store.state.browser.state?.control_state,
+  };
+}
+
 function handleBrowserEvent(event) {
   if (!event || !event.type) return;
   if (event.type === "browser.frame") {
@@ -93,16 +104,10 @@ function handleBrowserEvent(event) {
     return;
   }
   const data = event.data || {};
-  if (["browser.loaded", "browser.url_changed"].includes(event.type)) {
-    updateBrowserState({ url: data.url, title: data.title });
+  if (["browser.started", "browser.loaded", "browser.url_changed"].includes(event.type)) {
+    updateBrowserState(realtimeStatePatch(data));
   } else if (event.type === "browser.control_changed") {
-    updateBrowserState({
-      owner: data.owner,
-      control_state: data.control_state,
-      url: data.url ?? store.state.browser.state?.url,
-      title: data.title ?? store.state.browser.state?.title,
-      tabs: data.tabs ?? store.state.browser.state?.tabs,
-    });
+    updateBrowserState(realtimeStatePatch(data));
     updateBrowser({ takeoverRequested: data.owner === "user" ? store.state.browser.takeoverRequested : false });
   } else if (event.type === "browser.session_ready") {
     updateBrowser({ owner: data.owner || "agent", controlState: data.control_state || "AGENT_CONTROL" });
@@ -206,7 +211,7 @@ async function createLiveBrowser() {
 }
 
 async function runObjective(objective) {
-  if (store.state.lastRun?.run_status === "WAITING_USER") {
+  if (store.state.lastRun?.run_status === "WAITING_USER" || browserHasUserControl()) {
     toast("Return browser control to Nisr before starting another objective.", "error");
     return;
   }
