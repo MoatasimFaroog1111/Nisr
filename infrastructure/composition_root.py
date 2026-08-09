@@ -28,9 +28,10 @@ from adapters.tools.shell import ShellTool
 from adapters.tools.web import WebFetchTool, WebSearchTool
 from application.browser_runtime import BrowserControlManager, BrowserManager, BrowserService
 from application.browser_streaming import BrowserFrameStreamer
-from application.execution import ActionExecutor, ContextBuilder, ContextCompressor, ExecutionEngine, SubagentCoordinator
+from application.execution import ActionExecutor, ContextBuilder, ContextCompressor, ExecutionEngine
 from application.orchestrator import Orchestrator
 from application.planning import PlanningService
+from application.subagent_budget import AdaptiveSubagentCoordinator
 from application.token_budget import RunTokenBudgetManager
 from application.verification import VerificationService
 from domain.contracts import RiskPolicy
@@ -206,7 +207,7 @@ def build_runtime(
 
     planner = PlanningService(provider)
     verifier = VerificationService(tools)
-    subagents = SubagentCoordinator(provider)
+    subagents = AdaptiveSubagentCoordinator(provider, token_budget)
     context = ContextBuilder(ContextCompressor(settings.context_budget_chars), token_budget)
     action_executor = ActionExecutor(tools, memory, subagents, audit)
     execution = ExecutionEngine(provider, tools, memory, action_executor, context)
