@@ -29,6 +29,7 @@ RUN useradd --create-home --uid 10001 nisr \
 ENV AGENT_WORKSPACE=/app/workspace \
     AGENT_MEMORY_DB=/app/data/agent_memory.sqlite3 \
     AGENT_APPROVAL_DB=/app/data/approvals.sqlite3 \
+    AGENT_SESSION_DB=/app/data/sessions.sqlite3 \
     AGENT_AUDIT_LOG=/app/data/audit.jsonl \
     AGENT_ARTIFACTS_DIR=/app/artifacts
 
