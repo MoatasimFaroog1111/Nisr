@@ -11,7 +11,7 @@ from api.errors import install_error_handlers
 from infrastructure.composition_root import build_management, build_runtime
 from infrastructure.readiness import readiness_snapshot
 
-app = FastAPI(title="Nisr", version="0.3.1")
+app = FastAPI(title="Nisr", version="0.3.2")
 install_error_handlers(app)
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
 
@@ -35,24 +35,28 @@ async def home():
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "service": "nisr", "version": "0.3.1"}
+    return {"ok": True, "service": "nisr", "version": "0.3.2"}
 
 
 @app.get("/readiness")
 async def readiness():
     snapshot = await readiness_snapshot()
+    snapshot["version"] = "0.3.2"
     return JSONResponse(status_code=200 if snapshot["ok"] else 503, content=snapshot)
 
 
 @app.post("/run")
 async def run_agent(request: RunRequest):
     container = build_runtime(approvals=request.approvals)
-    state = await container.orchestrator.run(
-        request.objective,
-        request.constraints,
-        request.approvals,
-    )
-    return state.model_dump(mode="json")
+    try:
+        state = await container.orchestrator.run(
+            request.objective,
+            request.constraints,
+            request.approvals,
+        )
+        return state.model_dump(mode="json")
+    finally:
+        await container.browser_session.close()
 
 
 @app.get("/approvals")
@@ -62,13 +66,41 @@ async def approvals(status: str | None = None, limit: int = 100):
 
 @app.post("/approvals/{request_id}/approve")
 async def approve(request_id: str):
+    management = build_management()
     try:
-        token = build_management().approvals.approve(request_id)
-        return {"request_id": request_id, "token": token}
+        token = management.approvals.approve(request_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    container = build_runtime(approvals=[token])
+    session_id = container.sessions.find_session_by_approval(request_id)
+    if not session_id:
+        return {
+            "request_id": request_id,
+            "status": "approved",
+            "resumed": False,
+            "message": "Approval granted. No resumable session was linked to this older request.",
+        }
+
+    try:
+        state = await container.orchestrator.resume(
+            session_id,
+            approvals=[token],
+            approved_request_id=request_id,
+        )
+        return {
+            "request_id": request_id,
+            "status": "approved",
+            "resumed": True,
+            "session_id": session_id,
+            "state": state.model_dump(mode="json"),
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        await container.browser_session.close()
 
 
 @app.post("/approvals/{request_id}/deny")
