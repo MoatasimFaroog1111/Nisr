@@ -83,7 +83,7 @@ class SubagentRequest(BaseModel):
 
 class AgentState(BaseModel):
     session_id: str = Field(default_factory=lambda: uuid4().hex)
-    user_id: str = Field(default="api", exclude=True, repr=False)
+    user_id: str = "api"
     browser_session_id: str | None = None
     objective: str
     constraints: list[str] = Field(default_factory=list)
