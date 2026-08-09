@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from ports.provider_telemetry import ProviderCallMetrics
+from domain.provider import ProviderCallMetrics
 
 
 class TokenBudgetPort(Protocol):
