@@ -35,6 +35,8 @@ class Store {
   subscribe(listener) { this.#listeners.add(listener); return () => this.#listeners.delete(listener); }
   set(patch) { this.#state = { ...this.#state, ...patch }; this.#emit(); }
   update(updater) { this.#state = updater(this.#state); this.#emit(); }
+  setSilent(patch) { this.#state = { ...this.#state, ...patch }; }
+  updateSilent(updater) { this.#state = updater(this.#state); }
   #emit() { for (const listener of this.#listeners) listener(this.#state); }
 }
 
