@@ -21,20 +21,41 @@ def test_gold_white_design_contract():
     assert "--gold: #ffd200" in css
     assert "--page: #ffffff" in css
     assert "border-color: var(--gold)" in css
+    assert ".computer-panel" in css
+    assert ".browser-viewer" in css
 
 
-def test_components_do_not_call_backend_directly():
+def test_components_do_not_call_backend_or_websocket_directly():
     components = list((UI / "js" / "components").glob("*.js"))
     assert components
     for component in components:
         source = component.read_text(encoding="utf-8")
         assert "fetch(" not in source, f"{component.name} bypasses the API client"
+        assert "new WebSocket" not in source, f"{component.name} bypasses the realtime client"
 
     api_client = (UI / "js" / "services" / "api-client.js").read_text(encoding="utf-8")
+    socket_client = (UI / "js" / "services" / "browser-socket.js").read_text(encoding="utf-8")
     assert "fetch(" in api_client
+    assert "new WebSocket" in socket_client
 
 
-def test_ui_has_separate_state_and_service_layers():
+def test_ui_has_separate_state_service_and_computer_components():
     assert (UI / "js" / "state" / "store.js").is_file()
     assert (UI / "js" / "services" / "api-client.js").is_file()
-    assert len(list((UI / "js" / "components").glob("*.js"))) >= 8
+    assert (UI / "js" / "services" / "browser-socket.js").is_file()
+    for name in (
+        "computer-panel.js",
+        "browser-viewer.js",
+        "browser-controls.js",
+        "browser-status.js",
+        "browser-activity.js",
+    ):
+        assert (UI / "js" / "components" / name).is_file()
+
+
+def test_private_browser_input_is_masked_and_activity_avoids_chain_of_thought():
+    controls = (UI / "js" / "components" / "browser-controls.js").read_text(encoding="utf-8")
+    assert 'type="password"' in controls
+    assert 'autocomplete="off"' in controls
+    activity = (UI / "js" / "components" / "browser-activity.js").read_text(encoding="utf-8")
+    assert "chain-of-thought" in activity
