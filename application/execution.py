@@ -7,11 +7,13 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from application.model_calls import complete_model
 from domain.contracts import ACTION_PROTOCOL, SYSTEM_PROMPT
 from domain.models import AgentAction, AgentState, SubagentRequest, Task
+from domain.provider import ModelCallContext
 from ports.audit import AuditPort
 from ports.memory import MemoryPort
-from ports.model_provider import ModelCallContext, ModelProviderPort
+from ports.model_provider import ModelProviderPort
 from ports.token_budget import TokenBudgetPort
 from ports.tool import ToolRegistryPort
 
@@ -35,7 +37,7 @@ class TaskExecutionOutcome:
 
 
 class ContextCompressor:
-    """Pure application helper that bounds context without knowing storage/vendors."""
+    """Bounds older context while preserving the newest observations verbatim."""
 
     def __init__(self, budget_chars: int = 50_000, preserve_recent: int = 4):
         self._budget_chars = max(4_000, budget_chars)
@@ -62,8 +64,7 @@ class ContextCompressor:
         recent = rows[-self._preserve_recent :]
         older = rows[: -self._preserve_recent]
         compacted = [self._shorten(dict(row)) for row in older] + [dict(row) for row in recent]
-        serialized = json.dumps(compacted, ensure_ascii=False, default=str)
-        if len(serialized) <= effective_budget:
+        if len(json.dumps(compacted, ensure_ascii=False, default=str)) <= effective_budget:
             return compacted
 
         compacted = [self._shorten(dict(row), 350) for row in older] + [dict(row) for row in recent]
@@ -71,8 +72,6 @@ class ContextCompressor:
             json.dumps(compacted, ensure_ascii=False, default=str)
         ) > effective_budget:
             compacted.pop(0)
-        if len(json.dumps(compacted, ensure_ascii=False, default=str)) > effective_budget:
-            compacted = [self._shorten(dict(row), 250) for row in compacted]
         return compacted
 
 
@@ -163,7 +162,8 @@ class SubagentCoordinator:
         async with self._semaphore:
             system = ROLE_PROMPTS.get(role, f"You are a specialist agent for role: {role}.")
             prompt = f"TASK:\n{task}\n\nCONTEXT:\n{context}\n\nReturn useful findings only."
-            return await self._provider.complete(
+            return await complete_model(
+                self._provider,
                 prompt,
                 system=system,
                 context=ModelCallContext(session_id=session_id, purpose=f"subagent:{role}"),
@@ -182,7 +182,6 @@ class SubagentCoordinator:
                 "task": req.task,
                 "result": await self.run(req.role, req.task, context, session_id=session_id),
             }
-
         return await asyncio.gather(*(one(req) for req in requests))
 
 
@@ -375,7 +374,8 @@ class ExecutionEngine:
                 f"{ACTION_PROTOCOL}\n\nCURRENT TASK:\n{task.model_dump_json(indent=2)}\n\n"
                 f"RUNTIME CONTEXT:\n{context}\n"
             )
-            raw = await self._provider.complete(
+            raw = await complete_model(
+                self._provider,
                 prompt,
                 system=SYSTEM_PROMPT,
                 context=ModelCallContext(session_id=state.session_id, purpose="agent_step"),
