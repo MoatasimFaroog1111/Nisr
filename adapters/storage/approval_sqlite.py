@@ -144,10 +144,12 @@ class ApprovalService:
         repository: SqliteApprovalRepository,
         tokens: HmacApprovalTokenService,
         auto_approve_low_risk: bool = True,
+        presented_approvals: list[str] | None = None,
     ):
         self._repository = repository
         self._tokens = tokens
         self._auto_approve_low_risk = auto_approve_low_risk
+        self._presented_approvals = list(presented_approvals or [])
 
     def request(self, action_type: str, payload: dict[str, Any], risk: RiskLevel, ttl_minutes: int = 30) -> dict[str, Any]:
         action_hash = self._tokens.action_hash(action_type, payload)
@@ -210,7 +212,8 @@ class ApprovalService:
             return True, None
         if token and self.verify(token, action_type, payload):
             return True, None
-        for supplied in legacy_approvals or []:
+        supplied_approvals = list(legacy_approvals or []) + self._presented_approvals
+        for supplied in supplied_approvals:
             if supplied.startswith("apv1.") and self.verify(supplied, action_type, payload):
                 return True, None
             if supplied in {f"risk:{risk.value}", action_type}:
