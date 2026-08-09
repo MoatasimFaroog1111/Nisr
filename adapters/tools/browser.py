@@ -4,7 +4,7 @@ from typing import Any
 
 from adapters.tools.base import BaseTool
 from application.browser_runtime import BrowserService
-from domain.browser import BrowserControlError, SensitiveBrowserOperation
+from domain.browser import BrowserControlError, BrowserState, SensitiveBrowserOperation
 from domain.models import ToolResult
 from ports.tool import ToolExecutionContext
 
@@ -39,6 +39,14 @@ class BrowserActionTool(BaseTool):
         self.name = f"browser.{action}"
         self.description = _DESCRIPTIONS[action]
 
+    @staticmethod
+    def _agent_observation(state: BrowserState) -> dict[str, Any]:
+        payload = state.model_dump(mode="json")
+        if state.sensitive_signals:
+            payload["text_excerpt"] = ""
+            payload["interactables"] = []
+        return payload
+
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
         return ToolResult(ok=False, error="Browser tools require agent execution context")
 
@@ -53,15 +61,18 @@ class BrowserActionTool(BaseTool):
                 state = await self._service.navigate(context.session_id, user_id, task_id, str(arguments.get("url", "")))
             elif self._action == "view":
                 state = await self._service.view(context.session_id, user_id, task_id)
-                metadata = {}
                 if state.sensitive_signals:
-                    metadata = {
-                        "waiting_user": True,
-                        "code": "USER_TAKEOVER_REQUIRED",
-                        "reason": ", ".join(state.sensitive_signals),
-                    }
-                    return ToolResult(ok=True, output=state.model_dump(mode="json"), metadata=metadata)
-                return ToolResult(ok=True, output=state.model_dump(mode="json"))
+                    reason = ", ".join(state.sensitive_signals)
+                    return ToolResult(
+                        ok=True,
+                        output=self._agent_observation(state),
+                        metadata={
+                            "waiting_user": True,
+                            "code": "USER_TAKEOVER_REQUIRED",
+                            "reason": reason,
+                        },
+                    )
+                return ToolResult(ok=True, output=self._agent_observation(state))
             elif self._action == "click":
                 state = await self._service.click(context.session_id, user_id, task_id, str(arguments.get("selector", "")))
             elif self._action == "input":
@@ -112,7 +123,7 @@ class BrowserActionTool(BaseTool):
                 )
             else:
                 return ToolResult(ok=False, error="Unsupported browser action")
-            return ToolResult(ok=True, output=state.model_dump(mode="json"))
+            return ToolResult(ok=True, output=self._agent_observation(state))
         except SensitiveBrowserOperation as exc:
             return ToolResult(
                 ok=False,
