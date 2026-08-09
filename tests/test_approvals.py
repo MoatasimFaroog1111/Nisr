@@ -1,17 +1,20 @@
-from super_agent.core.approvals import ApprovalManager
-from super_agent.models import RiskLevel
+from adapters.storage.approval_sqlite import ApprovalService, HmacApprovalTokenService, SqliteApprovalRepository
+from domain.models import RiskLevel
+
+def build_service(tmp_path):
+    return ApprovalService(SqliteApprovalRepository(tmp_path / "approvals.sqlite3"), HmacApprovalTokenService("test-secret"))
 
 def test_approval_token_is_action_scoped(tmp_path):
-    m=ApprovalManager(tmp_path/'a.sqlite3','secret')
-    payload={'path':'x.txt'}; req=m.request('file_write',payload,RiskLevel.MEDIUM); token=m.approve(req['request_id'])
-    assert m.verify(token,'file_write',payload)
-    assert not m.verify(token,'file_write',{'path':'y.txt'})
+    service = build_service(tmp_path)
+    payload = {"path": "x.txt"}
+    request = service.request("file_write", payload, RiskLevel.MEDIUM)
+    token = service.approve(request["request_id"])
+    assert service.verify(token, "file_write", payload)
+    assert not service.verify(token, "file_write", {"path": "y.txt"})
 
-
-def test_approved_token_can_be_supplied_at_runtime_level(tmp_path):
-    m=ApprovalManager(tmp_path/'b.sqlite3','secret')
-    payload={'operation':'x'}
-    req=m.request('deployment',payload,RiskLevel.MEDIUM)
-    token=m.approve(req['request_id'])
-    ok, pending=m.authorize_or_request('deployment',payload,RiskLevel.MEDIUM,legacy_approvals=[token])
-    assert ok and pending is None
+def test_repository_and_token_signer_are_separate_components(tmp_path):
+    repository = SqliteApprovalRepository(tmp_path / "a.sqlite3")
+    signer = HmacApprovalTokenService("secret")
+    service = ApprovalService(repository, signer)
+    request = service.request("deploy", {"image": "nisr"}, RiskLevel.MEDIUM)
+    assert request["status"] == "pending"

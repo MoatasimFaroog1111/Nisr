@@ -1,13 +1,15 @@
-import asyncio, pytest
-from super_agent.providers.base import ModelProvider
-from super_agent.core.subagents import SubagentManager
-from super_agent.models import SubagentRequest
+import asyncio
+import pytest
+from application.execution import SubagentCoordinator
+from domain.models import SubagentRequest
 
-class EchoProvider(ModelProvider):
-    async def complete(self,prompt:str,system:str='')->str:
-        await asyncio.sleep(0.01); return system.split('.')[0]
+class SlowProvider:
+    async def complete(self, prompt: str, system: str = "") -> str:
+        await asyncio.sleep(0.02)
+        return "ok"
 
 @pytest.mark.asyncio
-async def test_parallel_subagents():
-    m=SubagentManager(EchoProvider()); out=await m.run_many([SubagentRequest(role='researcher',task='a'),SubagentRequest(role='tester',task='b')],'ctx')
-    assert len(out)==2 and {x['role'] for x in out}=={'researcher','tester'}
+async def test_parallel_subagents_return_all_results():
+    coordinator = SubagentCoordinator(SlowProvider(), max_parallel=3)
+    result = await coordinator.run_many([SubagentRequest(role="researcher", task="a"), SubagentRequest(role="tester", task="b")], "context")
+    assert [row["role"] for row in result] == ["researcher", "tester"]

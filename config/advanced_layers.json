@@ -1,40 +1,15 @@
 {
-  "version": "0.2.0",
+  "version": "0.3.0",
   "layers": {
-    "web_research": [
-      "web_search",
-      "web_fetch"
-    ],
-    "browser_automation": [
-      "browser"
-    ],
-    "git_github": [
-      "git",
-      "github"
-    ],
-    "database": [
-      "database"
-    ],
-    "deployment": [
-      "deployment"
-    ],
-    "multi_agent_parallel": [
-      "delegate_parallel"
-    ],
-    "context_compression": [
-      "ContextCompressor",
-      "ContextManager"
-    ],
-    "artifact_manager": [
-      "artifact",
-      "ArtifactManager"
-    ],
-    "approval_system": [
-      "ApprovalManager",
-      "approval_status"
-    ],
-    "audit_log": [
-      "AuditLog"
-    ]
+    "web_research": ["web_search", "web_fetch"],
+    "browser_automation": ["browser"],
+    "git_github": ["git", "github"],
+    "database": ["database"],
+    "deployment": ["deployment"],
+    "multi_agent_parallel": ["delegate_parallel"],
+    "context_compression": ["ContextCompressor", "ContextBuilder"],
+    "artifact_manager": ["artifact", "ArtifactPort"],
+    "approval_system": ["ApprovalService", "ApprovalPort", "approval_status"],
+    "audit_log": ["AuditPort"]
   }
 }

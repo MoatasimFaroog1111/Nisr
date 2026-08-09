@@ -1,38 +1,9 @@
 {
   "actions": {
-    "tool": {
-      "required": [
-        "tool.name",
-        "tool.arguments"
-      ]
-    },
-    "delegate": {
-      "required": [
-        "subagent_task"
-      ],
-      "roles": [
-        "researcher",
-        "architect",
-        "coder",
-        "tester",
-        "debugger"
-      ]
-    },
-    "memory_write": {
-      "required": [
-        "memory_key",
-        "memory_value"
-      ]
-    },
-    "plan_update": {
-      "required": [
-        "plan"
-      ]
-    },
-    "finish": {
-      "required": [
-        "result"
-      ]
-    }
+    "tool": {"required": ["tool.name", "tool.arguments"]},
+    "delegate": {"required": ["subagent_task"], "roles": ["researcher", "architect", "coder", "tester", "debugger"]},
+    "memory_write": {"required": ["memory_key", "memory_value"]},
+    "plan_update": {"required": ["plan"]},
+    "finish": {"required": ["result"]}
   }
 }
