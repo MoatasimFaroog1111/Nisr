@@ -1,15 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Protocol
 
-
-@dataclass(frozen=True, slots=True)
-class ModelCallContext:
-    """Vendor-neutral metadata for one model call; never contains prompt or secrets."""
-
-    session_id: str = ""
-    purpose: str = "agent"
+from domain.provider import ModelCallContext
 
 
 class ModelProviderPort(Protocol):
