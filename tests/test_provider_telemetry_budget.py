@@ -137,6 +137,7 @@ def test_audit_provider_telemetry_never_receives_prompt_or_credentials():
     serialized = repr(audit.rows[0])
     assert "provider.telemetry" in serialized
     assert "req_429" in serialized
-    assert "prompt" not in serialized.lower()
+    assert "super-secret-prompt" not in serialized
+    assert "Bearer test-key" not in serialized
     assert "authorization" not in serialized.lower()
     assert "api_key" not in serialized.lower()
