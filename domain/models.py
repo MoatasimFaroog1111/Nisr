@@ -86,7 +86,7 @@ class AgentState(BaseModel):
     memories_read: list[str] = Field(default_factory=list)
     memories_written: list[str] = Field(default_factory=list)
     risk_level: RiskLevel = RiskLevel.LOW
-    user_approvals: list[str] = Field(default_factory=list)
+    user_approvals: list[str] = Field(default_factory=list, exclude=True, repr=False)
     pending_approvals: list[dict[str, Any]] = Field(default_factory=list)
     step_count: int = 0
     resume_count: int = 0
