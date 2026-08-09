@@ -164,7 +164,11 @@ class Orchestrator:
                 data={"objective": objective, "constraints": state.constraints},
             )
         state.mode = AgentMode.PLANNING
-        state.plan = await self._planner.create_plan(objective, state.constraints)
+        state.plan = await self._planner.create_plan(
+            objective,
+            state.constraints,
+            session_id=state.session_id,
+        )
         self._save(state, "running")
         if self._audit:
             self._audit.record(
