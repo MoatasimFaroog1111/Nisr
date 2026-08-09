@@ -37,6 +37,7 @@ class BrowserState(BaseModel):
     tabs: list[BrowserTab] = Field(default_factory=list)
     viewport: dict[str, int] = Field(default_factory=dict)
     interactables: list[dict[str, Any]] = Field(default_factory=list)
+    text_excerpt: str = ""
     sensitive_signals: list[str] = Field(default_factory=list)
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
