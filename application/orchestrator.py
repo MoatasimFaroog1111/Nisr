@@ -31,6 +31,23 @@ class Orchestrator:
         if self._sessions:
             self._sessions.save(state, status)
 
+    def _mark_waiting(self, state: AgentState) -> AgentState:
+        if state.current_task:
+            for task in state.plan.tasks:
+                if task.id == state.current_task:
+                    task.status = TaskStatus.WAITING_APPROVAL
+                    break
+        state.mode = AgentMode.WAITING_APPROVAL
+        state.final_result = "Waiting for your approval before continuing this task."
+        self._save(state, "waiting_approval")
+        if self._audit:
+            self._audit.record(
+                "agent.waiting_approval",
+                session_id=state.session_id,
+                data={"task": state.current_task, "pending_approvals": state.pending_approvals},
+            )
+        return state
+
     async def _continue(self, state: AgentState, step_limit: int) -> AgentState:
         for task in state.plan.tasks:
             if task.id in state.completed_tasks or task.status == TaskStatus.COMPLETED:
@@ -50,17 +67,7 @@ class Orchestrator:
             outcome = await self._execution.execute_task(task, state, step_limit)
 
             if outcome.waiting_approval:
-                task.status = TaskStatus.WAITING_APPROVAL
-                state.mode = AgentMode.WAITING_APPROVAL
-                state.final_result = "Waiting for your approval before continuing this task."
-                self._save(state, "waiting_approval")
-                if self._audit:
-                    self._audit.record(
-                        "agent.waiting_approval",
-                        session_id=state.session_id,
-                        data={"task": task.id, "pending_approvals": state.pending_approvals},
-                    )
-                return state
+                return self._mark_waiting(state)
 
             if not outcome.finished:
                 task.status = TaskStatus.BLOCKED
@@ -141,6 +148,14 @@ class Orchestrator:
         if not state:
             raise KeyError("Unknown agent session")
 
+        pending = next(
+            (
+                request
+                for request in state.pending_approvals
+                if request.get("request_id") == approved_request_id
+            ),
+            None,
+        )
         state.user_approvals.extend(token for token in approvals if token not in state.user_approvals)
         state.pending_approvals = [
             request
@@ -168,5 +183,11 @@ class Orchestrator:
                 session_id=state.session_id,
                 data={"approval_request_id": approved_request_id, "resume_count": state.resume_count},
             )
+
+        if pending:
+            replay = await self._execution.resume_approved_action(pending, state)
+            if replay.waiting_approval:
+                return self._mark_waiting(state)
+            self._save(state, "resuming")
 
         return await self._continue(state, state.step_count + self._max_steps)
