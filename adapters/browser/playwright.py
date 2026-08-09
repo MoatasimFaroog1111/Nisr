@@ -59,11 +59,15 @@ class BrowserSession:
 
 class PlaywrightBrowserTool(BaseTool):
     name = "browser"
-    description = "Browser automation. args: operation(open|snapshot|click|fill|screenshot|close), plus url/selector/value as required. Interactive actions require approval."
+    description = "Browser automation. args: operation(open|snapshot|click|fill|screenshot|close), plus url/selector/value as required. For resumable click/fill, url may be supplied so the browser restores that page before the action. Interactive actions require approval."
 
     def __init__(self, session: BrowserSession, approvals: ApprovalPort):
         self._session = session
         self._approvals = approvals
+
+    @staticmethod
+    def _valid_http_url(url: str) -> bool:
+        return urlparse(url).scheme in {"http", "https"}
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
         operation = str(arguments.get("operation", "")).lower()
@@ -75,7 +79,7 @@ class PlaywrightBrowserTool(BaseTool):
             page = self._session.page
             if operation == "open":
                 url = str(arguments.get("url", ""))
-                if urlparse(url).scheme not in {"http", "https"}:
+                if not self._valid_http_url(url):
                     return ToolResult(ok=False, error="Only HTTP(S) navigation is allowed")
                 response = await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
                 return ToolResult(
@@ -101,6 +105,12 @@ class PlaywrightBrowserTool(BaseTool):
                     metadata={"changed_artifact": str(path)},
                 )
             if operation in {"click", "fill"}:
+                restore_url = str(arguments.get("url", "")).strip()
+                if restore_url:
+                    if not self._valid_http_url(restore_url):
+                        return ToolResult(ok=False, error="Only HTTP(S) navigation is allowed")
+                    if page.url != restore_url:
+                        await page.goto(restore_url, wait_until="domcontentloaded", timeout=30_000)
                 payload = {
                     "operation": operation,
                     "url": page.url,
@@ -114,10 +124,12 @@ class PlaywrightBrowserTool(BaseTool):
                     str(arguments.get("approval_token", "")),
                 )
                 if not allowed:
+                    approval = dict(request or {})
+                    approval["action_payload"] = payload
                     return ToolResult(
                         ok=False,
                         error="Browser interaction requires authorization",
-                        metadata={"approval_required": request, "risk": "medium"},
+                        metadata={"approval_required": approval, "risk": "medium"},
                     )
                 if not payload["selector"]:
                     return ToolResult(ok=False, error="selector is required")
