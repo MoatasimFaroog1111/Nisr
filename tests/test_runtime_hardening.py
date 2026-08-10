@@ -19,9 +19,12 @@ def test_browser_provider_blocks_obvious_local_targets():
     assert PlaywrightBrowserProvider._url_allowed("https://example.com")
 
 
-def test_railway_image_installs_browser_runtime():
+def test_railway_image_installs_browser_runtime_and_drops_privileges():
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    entrypoint = Path("docker-entrypoint.sh").read_text(encoding="utf-8")
     assert "pip install '.[browser]'" in dockerfile
     assert "playwright install --with-deps chromium" in dockerfile
     assert "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright" in dockerfile
-    assert "USER nisr" in dockerfile
+    assert 'ENTRYPOINT ["/app/docker-entrypoint.sh"]' in dockerfile
+    assert "USER nisr" not in dockerfile
+    assert 'exec gosu nisr "$@"' in entrypoint
