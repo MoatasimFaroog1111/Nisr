@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from domain.browser import BrowserFrame, BrowserState
+from domain.browser import BrowserFrame, BrowserState, BrowserTab
 
 
 class BrowserProvider(Protocol):
@@ -27,6 +27,21 @@ class BrowserProvider(Protocol):
     async def close_session(self, session_id: str) -> None: ...
     async def close_all(self) -> None: ...
     async def probe(self) -> dict[str, Any]: ...
+
+
+class PersistentBrowserProvider(Protocol):
+    """Optional persistence capability. Browser Service/Agent Core remain BrowserProvider-only."""
+
+    async def export_storage_state(self, session_id: str) -> dict[str, Any]: ...
+    async def restore_session(
+        self,
+        session_id: str,
+        *,
+        viewport: dict[str, int],
+        storage_state: dict[str, Any],
+        tabs: list[BrowserTab],
+        active_url: str,
+    ) -> BrowserState: ...
 
 
 class CdpBrowserProvider(Protocol):

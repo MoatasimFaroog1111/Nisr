@@ -48,6 +48,9 @@ class Settings(BaseModel):
     memory_db: Path = Path(os.getenv("AGENT_MEMORY_DB", "./data/agent_memory.sqlite3")).resolve()
     approval_db: Path = Path(os.getenv("AGENT_APPROVAL_DB", "./data/approvals.sqlite3")).resolve()
     session_db: Path = Path(os.getenv("AGENT_SESSION_DB", "./data/sessions.sqlite3")).resolve()
+    browser_session_db: Path = Path(
+        os.getenv("AGENT_BROWSER_SESSION_DB", os.getenv("AGENT_SESSION_DB", "./data/sessions.sqlite3"))
+    ).resolve()
     approval_secret: str = os.getenv("AGENT_APPROVAL_SECRET", "change-me-in-production")
     browser_session_secret: str = _browser_session_secret()
     browser_token_ttl_seconds: int = int(os.getenv("AGENT_BROWSER_TOKEN_TTL_SECONDS", "3600"))
@@ -62,7 +65,7 @@ class Settings(BaseModel):
     database_url: str = os.getenv("AGENT_DATABASE_URL", "")
     github_token: str = os.getenv("AGENT_GITHUB_TOKEN", "")
     github_api_base: str = os.getenv("AGENT_GITHUB_API_BASE", "https://api.github.com")
-    web_user_agent: str = os.getenv("AGENT_WEB_USER_AGENT", "Nisr/0.4.5")
+    web_user_agent: str = os.getenv("AGENT_WEB_USER_AGENT", "Nisr/0.5.0")
     max_steps: int = int(os.getenv("AGENT_MAX_STEPS", "30"))
     context_budget_chars: int = int(os.getenv("AGENT_CONTEXT_BUDGET_CHARS", "50000"))
     auto_approve_low_risk: bool = os.getenv("AGENT_AUTO_APPROVE_LOW_RISK", "true").lower() == "true"
@@ -73,6 +76,7 @@ class Settings(BaseModel):
             self.memory_db.parent,
             self.approval_db.parent,
             self.session_db.parent,
+            self.browser_session_db.parent,
             self.audit_log.parent,
             self.artifacts_dir,
         ):

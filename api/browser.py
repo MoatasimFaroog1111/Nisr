@@ -109,6 +109,7 @@ async def return_control(session_id: str, request: Request):
             "tabs": [tab.model_dump(mode="json") for tab in browser_state.tabs],
             "sensitive_signals": browser_state.sensitive_signals,
             "control_state": browser_state.control_state.value,
+            "reliability": browser_state.reliability,
         },
     ) if stored else None
     return {
@@ -150,18 +151,13 @@ async def _browser_ws_receiver(
         message = await websocket.receive_json()
         message_type = str(message.get("type", ""))
         if message_type == "browser.ping":
-            await runtime.events.publish(
-                BrowserEvent(type="browser.pong", session_id=session_id, actor="system")
-            )
+            await runtime.events.publish(BrowserEvent(type="browser.pong", session_id=session_id, actor="system"))
             continue
         if message_type != "browser.user_input":
             await runtime.events.publish(
                 BrowserEvent(
-                    type="browser.error",
-                    session_id=session_id,
-                    actor="user",
-                    message="Unsupported realtime browser message",
-                    data={"code": "UNSUPPORTED_MESSAGE"},
+                    type="browser.error", session_id=session_id, actor="user",
+                    message="Unsupported realtime browser message", data={"code": "UNSUPPORTED_MESSAGE"},
                 )
             )
             continue
@@ -172,11 +168,8 @@ async def _browser_ws_receiver(
         except Exception as exc:
             await runtime.events.publish(
                 BrowserEvent(
-                    type="browser.error",
-                    session_id=session_id,
-                    actor="user",
-                    message="Browser input could not be applied",
-                    data={"code": type(exc).__name__},
+                    type="browser.error", session_id=session_id, actor="user",
+                    message="Browser input could not be applied", data={"code": type(exc).__name__},
                 )
             )
 
@@ -191,7 +184,7 @@ async def browser_websocket(websocket: WebSocket, session_id: str):
         return
 
     try:
-        await runtime.service.register_session(session_id, user_id)
+        logical_session = await runtime.service.register_session(session_id, user_id)
     except Exception:
         await websocket.close(code=4403)
         return
@@ -205,7 +198,12 @@ async def browser_websocket(websocket: WebSocket, session_id: str):
             session_id=session_id,
             actor="system",
             message="Live browser channel connected",
-            data={"owner": "agent", "control_state": "AGENT_CONTROL"},
+            data={
+                "owner": logical_session.owner.value,
+                "control_state": logical_session.control_state.value,
+                "task_id": logical_session.task_id,
+                "recovered_metadata": logical_session.browser_started,
+            },
         )
     )
 
