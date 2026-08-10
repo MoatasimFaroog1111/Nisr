@@ -65,7 +65,7 @@ class Settings(BaseModel):
     database_url: str = os.getenv("AGENT_DATABASE_URL", "")
     github_token: str = os.getenv("AGENT_GITHUB_TOKEN", "")
     github_api_base: str = os.getenv("AGENT_GITHUB_API_BASE", "https://api.github.com")
-    web_user_agent: str = os.getenv("AGENT_WEB_USER_AGENT", "Nisr/0.5.0")
+    web_user_agent: str = os.getenv("AGENT_WEB_USER_AGENT", "Nisr/0.5.1")
     max_steps: int = int(os.getenv("AGENT_MAX_STEPS", "30"))
     context_budget_chars: int = int(os.getenv("AGENT_CONTEXT_BUDGET_CHARS", "50000"))
     auto_approve_low_risk: bool = os.getenv("AGENT_AUTO_APPROVE_LOW_RISK", "true").lower() == "true"
