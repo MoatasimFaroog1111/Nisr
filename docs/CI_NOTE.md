@@ -1,0 +1,1 @@
+Each ordered release is merged only after the repository's Python tests and JavaScript syntax checks pass in GitHub Actions.
