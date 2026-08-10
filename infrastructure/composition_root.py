@@ -15,6 +15,7 @@ from adapters.security.browser_tokens import BrowserSessionTokenService
 from adapters.storage.approval_sqlite import ApprovalService, HmacApprovalTokenService, SqliteApprovalRepository
 from adapters.storage.artifact_filesystem import FileSystemArtifactAdapter
 from adapters.storage.audit_jsonl import JsonlAuditAdapter
+from adapters.storage.browser_session_sqlite import SqliteBrowserSessionStore
 from adapters.storage.memory_sqlite import SqliteMemoryAdapter
 from adapters.storage.session_sqlite import SqliteSessionStore
 from adapters.telemetry.provider_audit import AuditProviderTelemetry
@@ -28,6 +29,7 @@ from adapters.tools.shell import ShellTool
 from adapters.tools.web import WebFetchTool, WebSearchTool
 from application.browser_runtime import BrowserControlManager, BrowserManager, BrowserService
 from application.browser_streaming import BrowserFrameStreamer
+from application.durable_browser import CheckpointingBrowserEventPublisher, DurableBrowserManager
 from application.execution import ActionExecutor, ContextBuilder, ContextCompressor, ExecutionEngine
 from application.guarded_session import GuardedSessionStore
 from application.orchestrator import Orchestrator
@@ -66,6 +68,7 @@ class BrowserRuntimeContainer:
 
     async def close(self) -> None:
         await self.streamer.close()
+        # close_all intentionally clears runtime objects only. Durable snapshots remain for restart recovery.
         await self.manager.close_all()
 
 
@@ -80,18 +83,11 @@ class RuntimeContainer(ManagementContainer):
 
 
 def _openai_candidate(
-    *,
-    api_base: str,
-    api_key: str,
-    model: str,
-    settings: Settings,
-    telemetry: ProviderTelemetryPort,
-    token_budget: TokenBudgetPort,
+    *, api_base: str, api_key: str, model: str, settings: Settings,
+    telemetry: ProviderTelemetryPort, token_budget: TokenBudgetPort,
 ) -> ModelProviderPort:
     return OpenAICompatibleAdapter(
-        api_base,
-        api_key,
-        model,
+        api_base, api_key, model,
         max_retries=settings.provider_max_retries,
         retry_base_seconds=settings.provider_retry_base_seconds,
         telemetry=telemetry,
@@ -100,35 +96,24 @@ def _openai_candidate(
 
 
 def _build_provider(
-    settings: Settings,
-    telemetry: ProviderTelemetryPort,
-    token_budget: TokenBudgetPort,
+    settings: Settings, telemetry: ProviderTelemetryPort, token_budget: TokenBudgetPort,
     audit: AuditPort | None = None,
 ) -> ModelProviderPort:
     if settings.provider != "openai_compatible":
         raise ValueError(f"Unsupported provider: {settings.provider}")
     primary = _openai_candidate(
-        api_base=settings.api_base,
-        api_key=settings.api_key,
-        model=settings.model,
-        settings=settings,
-        telemetry=telemetry,
-        token_budget=token_budget,
+        api_base=settings.api_base, api_key=settings.api_key, model=settings.model,
+        settings=settings, telemetry=telemetry, token_budget=token_budget,
     )
     candidates = [ProviderCandidate("primary", primary)]
     if settings.fallback_model:
         fallback_provider_name = settings.fallback_provider or settings.provider
         if fallback_provider_name != "openai_compatible":
             raise ValueError(f"Unsupported fallback provider: {fallback_provider_name}")
-        fallback = _openai_candidate(
-            api_base=settings.fallback_api_base,
-            api_key=settings.fallback_api_key,
-            model=settings.fallback_model,
-            settings=settings,
-            telemetry=telemetry,
-            token_budget=token_budget,
-        )
-        candidates.append(ProviderCandidate("fallback", fallback))
+        candidates.append(ProviderCandidate("fallback", _openai_candidate(
+            api_base=settings.fallback_api_base, api_key=settings.fallback_api_key,
+            model=settings.fallback_model, settings=settings, telemetry=telemetry, token_budget=token_budget,
+        )))
     return primary if len(candidates) == 1 else ResilientModelProvider(candidates, audit=audit)
 
 
@@ -150,18 +135,13 @@ def _build_database(url: str) -> DatabasePort | None:
     raise ValueError("Unsupported database URL scheme")
 
 
-def build_management(
-    settings: Settings = default_settings,
-    presented_approvals: list[str] | None = None,
-) -> ManagementContainer:
+def build_management(settings: Settings = default_settings, presented_approvals: list[str] | None = None) -> ManagementContainer:
     settings.prepare_directories()
     audit = JsonlAuditAdapter(settings.audit_log)
     artifact_store = FileSystemArtifactAdapter(settings.artifacts_dir)
-    approval_repository = SqliteApprovalRepository(settings.approval_db)
-    approval_tokens = HmacApprovalTokenService(settings.approval_secret)
     approval_service = ApprovalService(
-        approval_repository,
-        approval_tokens,
+        SqliteApprovalRepository(settings.approval_db),
+        HmacApprovalTokenService(settings.approval_secret),
         settings.auto_approve_low_risk,
         presented_approvals=presented_approvals,
     )
@@ -171,25 +151,25 @@ def build_management(
 def build_browser_runtime(settings: Settings = default_settings) -> BrowserRuntimeContainer:
     provider: BrowserProvider = ReliablePlaywrightBrowserProvider()
     events = InMemoryBrowserEventHub()
-    manager = BrowserManager(
+    snapshots = SqliteBrowserSessionStore(settings.browser_session_db)
+    manager = DurableBrowserManager(
         provider,
+        snapshots,
         viewport={"width": settings.browser_viewport_width, "height": settings.browser_viewport_height},
         timeout_seconds=settings.browser_session_timeout_seconds,
         max_sessions=settings.browser_max_sessions,
     )
     control = BrowserControlManager()
-    service = BrowserService(manager, control, provider, events)
+    checkpoint_events = CheckpointingBrowserEventPublisher(events, manager)
+    service = BrowserService(manager, control, provider, checkpoint_events)
     streamer = BrowserFrameStreamer(service, settings.browser_frame_interval_ms)
     tokens = BrowserSessionTokenService(settings.browser_session_secret, ttl_seconds=settings.browser_token_ttl_seconds)
     return BrowserRuntimeContainer(provider, events, manager, control, service, streamer, tokens)
 
 
 def build_runtime(
-    settings: Settings = default_settings,
-    *,
-    provider: ModelProviderPort | None = None,
-    approvals: list[str] | None = None,
-    browser_runtime: BrowserRuntimeContainer | None = None,
+    settings: Settings = default_settings, *, provider: ModelProviderPort | None = None,
+    approvals: list[str] | None = None, browser_runtime: BrowserRuntimeContainer | None = None,
 ) -> RuntimeContainer:
     settings.prepare_directories()
     legacy_approvals = approvals or []
