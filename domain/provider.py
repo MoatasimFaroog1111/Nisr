@@ -30,3 +30,32 @@ class ProviderCallMetrics:
     remaining_tokens: int | None = None
     reset_tokens: str | None = None
     error_type: str | None = None
+
+
+class ProviderError(RuntimeError):
+    """Vendor-neutral model-provider failure surfaced beyond an adapter boundary."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        status_code: int | None = None,
+        request_id: str | None = None,
+    ):
+        super().__init__(message)
+        self.retryable = retryable
+        self.status_code = status_code
+        self.request_id = request_id
+
+
+class ProviderUnavailableError(ProviderError):
+    pass
+
+
+class ProviderAuthenticationError(ProviderError):
+    pass
+
+
+class ProviderRequestError(ProviderError):
+    pass

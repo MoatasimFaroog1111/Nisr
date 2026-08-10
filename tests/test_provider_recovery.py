@@ -7,6 +7,7 @@ import pytest
 
 from adapters.llm.mock import MockModelAdapter
 from adapters.llm.openai_compatible import OpenAICompatibleAdapter
+from domain.provider import ProviderAuthenticationError
 from infrastructure.composition_root import build_runtime
 from infrastructure.settings import Settings
 
@@ -62,8 +63,10 @@ async def test_openai_adapter_does_not_retry_auth_errors():
         retry_base_seconds=0,
         transport=httpx.MockTransport(handler),
     )
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ProviderAuthenticationError) as exc_info:
         await adapter.complete("hello")
+    assert exc_info.value.retryable is False
+    assert exc_info.value.status_code == 401
     assert attempts == 1
 
 
