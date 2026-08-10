@@ -39,6 +39,7 @@ class BrowserState(BaseModel):
     interactables: list[dict[str, Any]] = Field(default_factory=list)
     text_excerpt: str = ""
     sensitive_signals: list[str] = Field(default_factory=list)
+    reliability: dict[str, Any] = Field(default_factory=dict)
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 

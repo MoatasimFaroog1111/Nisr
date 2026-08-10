@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
         await browser_runtime.close()
 
 
-app = FastAPI(title="Nisr", version="0.4.5", lifespan=lifespan)
+app = FastAPI(title="Nisr", version="0.4.6", lifespan=lifespan)
 install_error_handlers(app)
 app.include_router(browser_router)
 UI_DIR = Path(__file__).resolve().parent.parent / "ui"
@@ -65,13 +65,13 @@ async def home():
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "service": "nisr", "version": "0.4.5"}
+    return {"ok": True, "service": "nisr", "version": "0.4.6"}
 
 
 @app.get("/readiness")
 async def readiness(request: Request):
     snapshot = await readiness_snapshot(settings, request.app.state.browser_runtime.provider)
-    snapshot["version"] = "0.4.5"
+    snapshot["version"] = "0.4.6"
     return JSONResponse(status_code=200 if snapshot["ok"] else 503, content=snapshot)
 
 
