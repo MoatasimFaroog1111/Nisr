@@ -32,11 +32,13 @@ from application.execution import ActionExecutor, ContextBuilder, ContextCompres
 from application.guarded_session import GuardedSessionStore
 from application.orchestrator import Orchestrator
 from application.planning import PlanningService
+from application.provider_resilience import ProviderCandidate, ResilientModelProvider
 from application.subagent_budget import AdaptiveSubagentCoordinator
 from application.token_budget import RunTokenBudgetManager
 from application.verification import VerificationService
 from domain.contracts import RiskPolicy
 from infrastructure.settings import Settings, settings as default_settings
+from ports.audit import AuditPort
 from ports.database import DatabasePort
 from ports.model_provider import ModelProviderPort
 from ports.provider_telemetry import ProviderTelemetryPort
@@ -76,22 +78,60 @@ class RuntimeContainer(ManagementContainer):
     token_budget: RunTokenBudgetManager
 
 
-def _build_provider(
+def _openai_candidate(
+    *,
+    api_base: str,
+    api_key: str,
+    model: str,
     settings: Settings,
     telemetry: ProviderTelemetryPort,
     token_budget: TokenBudgetPort,
 ) -> ModelProviderPort:
-    if settings.provider == "openai_compatible":
-        return OpenAICompatibleAdapter(
-            settings.api_base,
-            settings.api_key,
-            settings.model,
-            max_retries=settings.provider_max_retries,
-            retry_base_seconds=settings.provider_retry_base_seconds,
+    return OpenAICompatibleAdapter(
+        api_base,
+        api_key,
+        model,
+        max_retries=settings.provider_max_retries,
+        retry_base_seconds=settings.provider_retry_base_seconds,
+        telemetry=telemetry,
+        token_budget=token_budget,
+    )
+
+
+def _build_provider(
+    settings: Settings,
+    telemetry: ProviderTelemetryPort,
+    token_budget: TokenBudgetPort,
+    audit: AuditPort | None = None,
+) -> ModelProviderPort:
+    if settings.provider != "openai_compatible":
+        raise ValueError(f"Unsupported provider: {settings.provider}")
+
+    primary = _openai_candidate(
+        api_base=settings.api_base,
+        api_key=settings.api_key,
+        model=settings.model,
+        settings=settings,
+        telemetry=telemetry,
+        token_budget=token_budget,
+    )
+    candidates = [ProviderCandidate("primary", primary)]
+
+    if settings.fallback_model:
+        fallback_provider_name = settings.fallback_provider or settings.provider
+        if fallback_provider_name != "openai_compatible":
+            raise ValueError(f"Unsupported fallback provider: {fallback_provider_name}")
+        fallback = _openai_candidate(
+            api_base=settings.fallback_api_base,
+            api_key=settings.fallback_api_key,
+            model=settings.fallback_model,
+            settings=settings,
             telemetry=telemetry,
             token_budget=token_budget,
         )
-    raise ValueError(f"Unsupported provider: {settings.provider}")
+        candidates.append(ProviderCandidate("fallback", fallback))
+
+    return primary if len(candidates) == 1 else ResilientModelProvider(candidates, audit=audit)
 
 
 def _sqlite_path_from_url(url: str) -> Path:
@@ -181,7 +221,7 @@ def build_runtime(
         context_safety_ratio=settings.context_budget_safety_ratio,
     )
     telemetry = AuditProviderTelemetry(audit)
-    provider = provider or _build_provider(settings, telemetry, token_budget)
+    provider = provider or _build_provider(settings, telemetry, token_budget, audit)
 
     memory = SqliteMemoryAdapter(settings.memory_db)
     sessions: SessionStorePort = GuardedSessionStore(SqliteSessionStore(settings.session_db))
