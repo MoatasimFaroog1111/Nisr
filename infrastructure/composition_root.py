@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from adapters.browser.playwright_provider import PlaywrightBrowserProvider
+from adapters.browser.reliable_playwright import ReliablePlaywrightBrowserProvider
 from adapters.database.postgres import PostgresDatabaseAdapter
 from adapters.database.sqlite import SqliteDatabaseAdapter
 from adapters.database.tool import DatabaseTool
@@ -39,6 +39,7 @@ from application.verification import VerificationService
 from domain.contracts import RiskPolicy
 from infrastructure.settings import Settings, settings as default_settings
 from ports.audit import AuditPort
+from ports.browser import BrowserProvider
 from ports.database import DatabasePort
 from ports.model_provider import ModelProviderPort
 from ports.provider_telemetry import ProviderTelemetryPort
@@ -55,7 +56,7 @@ class ManagementContainer:
 
 @dataclass(slots=True)
 class BrowserRuntimeContainer:
-    provider: PlaywrightBrowserProvider
+    provider: BrowserProvider
     events: InMemoryBrowserEventHub
     manager: BrowserManager
     control: BrowserControlManager
@@ -106,7 +107,6 @@ def _build_provider(
 ) -> ModelProviderPort:
     if settings.provider != "openai_compatible":
         raise ValueError(f"Unsupported provider: {settings.provider}")
-
     primary = _openai_candidate(
         api_base=settings.api_base,
         api_key=settings.api_key,
@@ -116,7 +116,6 @@ def _build_provider(
         token_budget=token_budget,
     )
     candidates = [ProviderCandidate("primary", primary)]
-
     if settings.fallback_model:
         fallback_provider_name = settings.fallback_provider or settings.provider
         if fallback_provider_name != "openai_compatible":
@@ -130,7 +129,6 @@ def _build_provider(
             token_budget=token_budget,
         )
         candidates.append(ProviderCandidate("fallback", fallback))
-
     return primary if len(candidates) == 1 else ResilientModelProvider(candidates, audit=audit)
 
 
@@ -171,7 +169,7 @@ def build_management(
 
 
 def build_browser_runtime(settings: Settings = default_settings) -> BrowserRuntimeContainer:
-    provider = PlaywrightBrowserProvider()
+    provider: BrowserProvider = ReliablePlaywrightBrowserProvider()
     events = InMemoryBrowserEventHub()
     manager = BrowserManager(
         provider,
@@ -182,19 +180,8 @@ def build_browser_runtime(settings: Settings = default_settings) -> BrowserRunti
     control = BrowserControlManager()
     service = BrowserService(manager, control, provider, events)
     streamer = BrowserFrameStreamer(service, settings.browser_frame_interval_ms)
-    tokens = BrowserSessionTokenService(
-        settings.browser_session_secret,
-        ttl_seconds=settings.browser_token_ttl_seconds,
-    )
-    return BrowserRuntimeContainer(
-        provider=provider,
-        events=events,
-        manager=manager,
-        control=control,
-        service=service,
-        streamer=streamer,
-        tokens=tokens,
-    )
+    tokens = BrowserSessionTokenService(settings.browser_session_secret, ttl_seconds=settings.browser_token_ttl_seconds)
+    return BrowserRuntimeContainer(provider, events, manager, control, service, streamer, tokens)
 
 
 def build_runtime(
@@ -204,15 +191,11 @@ def build_runtime(
     approvals: list[str] | None = None,
     browser_runtime: BrowserRuntimeContainer | None = None,
 ) -> RuntimeContainer:
-    """Composition root: the only place that chooses concrete adapters."""
     settings.prepare_directories()
     legacy_approvals = approvals or []
     risk = RiskPolicy()
     management = build_management(settings, presented_approvals=legacy_approvals)
     audit = management.audit
-    artifact_store = management.artifacts
-    approval_service = management.approvals
-
     token_budget = RunTokenBudgetManager(
         run_token_budget=settings.run_token_budget,
         provider_token_reserve=settings.provider_token_reserve,
@@ -222,53 +205,32 @@ def build_runtime(
     )
     telemetry = AuditProviderTelemetry(audit)
     provider = provider or _build_provider(settings, telemetry, token_budget, audit)
-
     memory = SqliteMemoryAdapter(settings.memory_db)
     sessions: SessionStorePort = GuardedSessionStore(SqliteSessionStore(settings.session_db))
     browser_runtime = browser_runtime or build_browser_runtime(settings)
     tools = ToolRegistry(audit=audit)
     for tool in (
-        FileListTool(settings.workspace),
-        FileReadTool(settings.workspace),
-        FileSearchTool(settings.workspace),
-        FileWriteTool(settings.workspace, risk, approval_service, legacy_approvals),
-        ShellTool(settings.workspace, risk, approval_service, legacy_approvals),
-        WebSearchTool(settings.web_user_agent),
-        WebFetchTool(settings.web_user_agent),
-        GitTool(settings.workspace, risk, approval_service),
-        GitHubRestTool(settings.github_token, settings.github_api_base, approval_service),
-        DockerDeploymentTool(settings.workspace, approval_service),
-        ArtifactTool(artifact_store),
-        ApprovalStatusTool(approval_service),
-        *browser_tools(browser_runtime.service),
+        FileListTool(settings.workspace), FileReadTool(settings.workspace), FileSearchTool(settings.workspace),
+        FileWriteTool(settings.workspace, risk, management.approvals, legacy_approvals),
+        ShellTool(settings.workspace, risk, management.approvals, legacy_approvals),
+        WebSearchTool(settings.web_user_agent), WebFetchTool(settings.web_user_agent),
+        GitTool(settings.workspace, risk, management.approvals),
+        GitHubRestTool(settings.github_token, settings.github_api_base, management.approvals),
+        DockerDeploymentTool(settings.workspace, management.approvals), ArtifactTool(management.artifacts),
+        ApprovalStatusTool(management.approvals), *browser_tools(browser_runtime.service),
     ):
         tools.register(tool)
     database = _build_database(settings.database_url)
     if database is not None:
-        tools.register(DatabaseTool(database, risk, approval_service))
-
+        tools.register(DatabaseTool(database, risk, management.approvals))
     planner = PlanningService(provider)
     verifier = VerificationService(tools)
     subagents = AdaptiveSubagentCoordinator(provider, token_budget)
     context = ContextBuilder(ContextCompressor(settings.context_budget_chars), token_budget)
     action_executor = ActionExecutor(tools, memory, subagents, audit)
     execution = ExecutionEngine(provider, tools, memory, action_executor, context)
-    orchestrator = Orchestrator(
-        planner,
-        execution,
-        verifier,
-        max_steps=settings.max_steps,
-        audit=audit,
-        sessions=sessions,
-    )
+    orchestrator = Orchestrator(planner, execution, verifier, max_steps=settings.max_steps, audit=audit, sessions=sessions)
     return RuntimeContainer(
-        orchestrator=orchestrator,
-        approvals=approval_service,
-        audit=audit,
-        artifacts=artifact_store,
-        memory=memory,
-        sessions=sessions,
-        tools=tools,
-        browser_runtime=browser_runtime,
-        token_budget=token_budget,
+        orchestrator=orchestrator, approvals=management.approvals, audit=audit, artifacts=management.artifacts,
+        memory=memory, sessions=sessions, tools=tools, browser_runtime=browser_runtime, token_budget=token_budget,
     )
