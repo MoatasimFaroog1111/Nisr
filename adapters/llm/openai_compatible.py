@@ -7,13 +7,18 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 
+from domain.provider import (
+    ProviderAuthenticationError,
+    ProviderRequestError,
+    ProviderUnavailableError,
+)
 from ports.model_provider import ModelCallContext
 from ports.provider_telemetry import ProviderCallMetrics, ProviderTelemetryPort
 from ports.token_budget import TokenBudgetPort
 
 
 class OpenAICompatibleAdapter:
-    """OpenAI-compatible chat adapter with retry, telemetry, and proactive budget throttling."""
+    """OpenAI-compatible chat adapter with retry, telemetry, throttling, and normalized failures."""
 
     _RETRYABLE_STATUS = {408, 409, 429, 500, 502, 503, 504}
 
@@ -107,6 +112,31 @@ class OpenAICompatibleAdapter:
         if self._token_budget:
             self._token_budget.observe(metrics)
 
+    @staticmethod
+    def _failure(response: httpx.Response) -> Exception:
+        status = response.status_code
+        request_id = response.headers.get("x-request-id")
+        if status in {401, 403}:
+            return ProviderAuthenticationError(
+                "The configured AI provider rejected authentication or model access.",
+                retryable=False,
+                status_code=status,
+                request_id=request_id,
+            )
+        if status in OpenAICompatibleAdapter._RETRYABLE_STATUS:
+            return ProviderUnavailableError(
+                "The AI provider is temporarily unavailable, rate limited, or quota constrained.",
+                retryable=True,
+                status_code=status,
+                request_id=request_id,
+            )
+        return ProviderRequestError(
+            "The AI provider rejected the request.",
+            retryable=False,
+            status_code=status,
+            request_id=request_id,
+        )
+
     async def complete(
         self,
         prompt: str,
@@ -145,24 +175,6 @@ class OpenAICompatibleAdapter:
                     response = await client.post(
                         f"{self._api_base}/chat/completions", headers=headers, json=payload
                     )
-                    should_retry = (
-                        response.status_code in self._RETRYABLE_STATUS
-                        and zero_based_attempt < self._max_retries
-                    )
-                    self._record(
-                        self._metrics(
-                            response,
-                            call_context,
-                            attempt=attempt,
-                            retrying=should_retry,
-                        )
-                    )
-                    if should_retry:
-                        await self._sleep(self._retry_delay(response, zero_based_attempt))
-                        continue
-                    response.raise_for_status()
-                    data = response.json()
-                    return data["choices"][0]["message"]["content"]
                 except (httpx.TimeoutException, httpx.NetworkError) as exc:
                     should_retry = zero_based_attempt < self._max_retries
                     self._record(
@@ -174,7 +186,32 @@ class OpenAICompatibleAdapter:
                             error_type=type(exc).__name__,
                         )
                     )
-                    if not should_retry:
-                        raise
-                    await self._sleep(self._retry_delay(None, zero_based_attempt))
-        raise RuntimeError("AI provider retry loop exited unexpectedly")
+                    if should_retry:
+                        await self._sleep(self._retry_delay(None, zero_based_attempt))
+                        continue
+                    raise ProviderUnavailableError(
+                        "The AI provider could not be reached after retries.",
+                        retryable=True,
+                    ) from exc
+
+                should_retry = (
+                    response.status_code in self._RETRYABLE_STATUS
+                    and zero_based_attempt < self._max_retries
+                )
+                self._record(
+                    self._metrics(
+                        response,
+                        call_context,
+                        attempt=attempt,
+                        retrying=should_retry,
+                        error_type="provider_http_error" if response.status_code >= 400 else None,
+                    )
+                )
+                if should_retry:
+                    await self._sleep(self._retry_delay(response, zero_based_attempt))
+                    continue
+                if response.status_code >= 400:
+                    raise self._failure(response)
+                data = response.json()
+                return data["choices"][0]["message"]["content"]
+        raise ProviderUnavailableError("AI provider retry loop exited unexpectedly", retryable=True)
