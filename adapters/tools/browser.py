@@ -47,6 +47,37 @@ class BrowserActionTool(BaseTool):
             payload["interactables"] = []
         return payload
 
+    async def _safe_observation(
+        self,
+        state: BrowserState,
+        *,
+        session_id: str,
+        user_id: str,
+        task_id: str | None,
+    ) -> ToolResult:
+        """Refresh state after every browser action and enforce takeover when a sensitive gate is visible.
+
+        Browser providers may return a lightweight state after navigation/click for performance. The
+        tool boundary therefore performs one authoritative `get_state()` observation before allowing
+        the agent to continue. This prevents an agent from declaring success on a CAPTCHA/login/OTP/
+        payment-verification page that appeared as a result of the previous action.
+        """
+        observed = await self._service.get_state(session_id, user_id)
+        if observed.sensitive_signals:
+            reason = ", ".join(observed.sensitive_signals)
+            await self._service.request_user_takeover(session_id, user_id, reason, task_id=task_id)
+            return ToolResult(
+                ok=True,
+                output=self._agent_observation(observed),
+                metadata={
+                    "waiting_user": True,
+                    "code": "USER_TAKEOVER_REQUIRED",
+                    "reason": reason,
+                    "sensitive_signals": list(observed.sensitive_signals),
+                },
+            )
+        return ToolResult(ok=True, output=self._agent_observation(observed or state))
+
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
         return ToolResult(ok=False, error="Browser tools require agent execution context")
 
@@ -61,18 +92,6 @@ class BrowserActionTool(BaseTool):
                 state = await self._service.navigate(context.session_id, user_id, task_id, str(arguments.get("url", "")))
             elif self._action == "view":
                 state = await self._service.view(context.session_id, user_id, task_id)
-                if state.sensitive_signals:
-                    reason = ", ".join(state.sensitive_signals)
-                    return ToolResult(
-                        ok=True,
-                        output=self._agent_observation(state),
-                        metadata={
-                            "waiting_user": True,
-                            "code": "USER_TAKEOVER_REQUIRED",
-                            "reason": reason,
-                        },
-                    )
-                return ToolResult(ok=True, output=self._agent_observation(state))
             elif self._action == "click":
                 state = await self._service.click(context.session_id, user_id, task_id, str(arguments.get("selector", "")))
             elif self._action == "input":
@@ -123,7 +142,12 @@ class BrowserActionTool(BaseTool):
                 )
             else:
                 return ToolResult(ok=False, error="Unsupported browser action")
-            return ToolResult(ok=True, output=self._agent_observation(state))
+            return await self._safe_observation(
+                state,
+                session_id=context.session_id,
+                user_id=user_id,
+                task_id=task_id,
+            )
         except SensitiveBrowserOperation as exc:
             return ToolResult(
                 ok=False,

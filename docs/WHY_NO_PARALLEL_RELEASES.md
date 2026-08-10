@@ -1,0 +1,1 @@
+The five hardening releases are intentionally sequential because each later change relies on invariants established by the previous release. This prevents parallel edits to shared orchestration, provider and browser contracts.

@@ -237,19 +237,39 @@ class Orchestrator:
         if state.mode != AgentMode.WAITING_USER and state.run_status != AgentRunStatus.WAITING_USER:
             return None
 
+        sensitive_signals = [str(item) for item in browser_observation.get("sensitive_signals", []) if str(item)]
+        if sensitive_signals:
+            reason = ", ".join(sensitive_signals)
+            state.evidence.append(
+                "User attempted to return browser control, but the sensitive verification gate is still present."
+            )
+            state.tool_results.append({
+                "tool": "browser.userObservation",
+                "arguments": {},
+                "ok": True,
+                "output": {
+                    "url": browser_observation.get("url"),
+                    "title": browser_observation.get("title"),
+                    "sensitive_signals": sensitive_signals,
+                },
+                "error": None,
+                "metadata": {"sensitive_gate_still_present": True},
+            })
+            return self._mark_waiting_user(state, reason)
+
         state.resume_count += 1
         state.final_result = None
         state.waiting_reason = None
         state.run_status = AgentRunStatus.RUNNING
         state.mode = AgentMode.RECOVERY
-        state.evidence.append("User returned browser control. Current browser state was captured and execution may continue.")
+        state.evidence.append("User returned browser control. Sensitive gates are clear and current browser state was captured.")
         state.tool_results.append({
             "tool": "browser.userObservation",
             "arguments": {},
             "ok": True,
             "output": browser_observation,
             "error": None,
-            "metadata": {"resumed_after_user": True},
+            "metadata": {"resumed_after_user": True, "sensitive_gate_cleared": True},
         })
         if state.current_task:
             for task in state.plan.tasks:

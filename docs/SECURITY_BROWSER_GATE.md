@@ -1,0 +1,1 @@
+Sensitive browser gating is a safety boundary, not a UI hint. The backend remains authoritative and the agent cannot complete a sensitive browser task until the current browser observation reports that the gate is clear.
