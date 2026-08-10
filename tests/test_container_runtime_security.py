@@ -24,6 +24,7 @@ def test_sqlite_runtime_paths_live_under_persistent_mount():
         "AGENT_MEMORY_DB=/app/data/agent_memory.sqlite3",
         "AGENT_APPROVAL_DB=/app/data/approvals.sqlite3",
         "AGENT_SESSION_DB=/app/data/sessions.sqlite3",
+        "AGENT_BROWSER_SESSION_DB=/app/data/browser_sessions.sqlite3",
         "AGENT_AUDIT_LOG=/app/data/audit.jsonl",
     ):
         assert variable in dockerfile
