@@ -29,6 +29,7 @@ from adapters.tools.web import WebFetchTool, WebSearchTool
 from application.browser_runtime import BrowserControlManager, BrowserManager, BrowserService
 from application.browser_streaming import BrowserFrameStreamer
 from application.execution import ActionExecutor, ContextBuilder, ContextCompressor, ExecutionEngine
+from application.guarded_session import GuardedSessionStore
 from application.orchestrator import Orchestrator
 from application.planning import PlanningService
 from application.subagent_budget import AdaptiveSubagentCoordinator
@@ -39,6 +40,7 @@ from infrastructure.settings import Settings, settings as default_settings
 from ports.database import DatabasePort
 from ports.model_provider import ModelProviderPort
 from ports.provider_telemetry import ProviderTelemetryPort
+from ports.session import SessionStorePort
 from ports.token_budget import TokenBudgetPort
 
 
@@ -68,7 +70,7 @@ class BrowserRuntimeContainer:
 class RuntimeContainer(ManagementContainer):
     orchestrator: Orchestrator
     memory: SqliteMemoryAdapter
-    sessions: SqliteSessionStore
+    sessions: SessionStorePort
     tools: ToolRegistry
     browser_runtime: BrowserRuntimeContainer
     token_budget: RunTokenBudgetManager
@@ -182,7 +184,7 @@ def build_runtime(
     provider = provider or _build_provider(settings, telemetry, token_budget)
 
     memory = SqliteMemoryAdapter(settings.memory_db)
-    sessions = SqliteSessionStore(settings.session_db)
+    sessions: SessionStorePort = GuardedSessionStore(SqliteSessionStore(settings.session_db))
     browser_runtime = browser_runtime or build_browser_runtime(settings)
     tools = ToolRegistry(audit=audit)
     for tool in (
