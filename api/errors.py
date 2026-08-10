@@ -7,6 +7,8 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from domain.provider import ProviderAuthenticationError, ProviderError, ProviderRequestError
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,6 +35,34 @@ def _upstream_classification(status: int) -> tuple[int, str, str, bool]:
 
 
 def install_error_handlers(app: FastAPI) -> None:
+    @app.exception_handler(ProviderError)
+    async def provider_error(request: Request, exc: ProviderError):
+        request_id = exc.request_id or uuid4().hex
+        if isinstance(exc, ProviderAuthenticationError):
+            status, code = 502, "upstream_auth_error"
+        elif isinstance(exc, ProviderRequestError):
+            status, code = 502, "upstream_request_error"
+        else:
+            status, code = 503, "upstream_unavailable"
+        logger.warning(
+            "provider_error request_id=%s path=%s upstream_status=%s retryable=%s error_type=%s",
+            request_id,
+            request.url.path,
+            exc.status_code,
+            exc.retryable,
+            type(exc).__name__,
+        )
+        return JSONResponse(
+            status_code=status,
+            content=_payload(
+                code=code,
+                message=str(exc),
+                request_id=request_id,
+                retryable=exc.retryable,
+                upstream_status=exc.status_code,
+            ),
+        )
+
     @app.exception_handler(httpx.HTTPStatusError)
     async def http_status_error(request: Request, exc: httpx.HTTPStatusError):
         request_id = uuid4().hex
