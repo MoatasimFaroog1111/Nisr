@@ -184,8 +184,7 @@ async def browser_websocket(websocket: WebSocket, session_id: str):
         return
 
     try:
-        await runtime.service.register_session(session_id, user_id)
-        current = await runtime.service.get_state(session_id, user_id)
+        logical_session = await runtime.service.register_session(session_id, user_id)
     except Exception:
         await websocket.close(code=4403)
         return
@@ -200,12 +199,10 @@ async def browser_websocket(websocket: WebSocket, session_id: str):
             actor="system",
             message="Live browser channel connected",
             data={
-                "owner": current.owner.value,
-                "control_state": current.control_state.value,
-                "url": current.url,
-                "title": current.title,
-                "tabs": [tab.model_dump(mode="json") for tab in current.tabs],
-                "reliability": current.reliability,
+                "owner": logical_session.owner.value,
+                "control_state": logical_session.control_state.value,
+                "task_id": logical_session.task_id,
+                "recovered_metadata": logical_session.browser_started,
             },
         )
     )
